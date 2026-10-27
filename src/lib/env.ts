@@ -48,7 +48,9 @@ export const env = {
     return str("SESSION_SECRET");
   },
   get isProduction() {
-    return str("NODE_ENV") === "production";
+    // The literal `process.env.NODE_ENV` is inlined at build time, so this also
+    // holds in edge runtimes that expose no NODE_ENV at run time.
+    return process.env.NODE_ENV === "production" || str("NODE_ENV") === "production";
   },
   get imageStorage(): "db" | "s3" {
     return str("IMAGE_STORAGE") === "s3" ? "s3" : "db";
