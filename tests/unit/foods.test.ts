@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { createMemoryDb, type Db } from "@/lib/db";
 import { createCustomFood, queryTokens, searchFoods, searchLocalFoods, upsertUsdaFoods } from "@/lib/foods/repo";
-import { normalizeFdcApiFood, normalizePortionLabel, parseUsdaCsv } from "@/lib/foods/usda";
+import { eachRow, normalizeFdcApiFood, normalizePortionLabel, parseUsdaCsv } from "@/lib/foods/usda";
 
 const files = {
   "food.csv": `"fdc_id","data_type","description","food_category_id","publication_date"
@@ -42,6 +42,17 @@ describe("USDA parsing", () => {
     expect(parsed.find((f) => f.externalId === "1")!.portions).toEqual([
       { label: "egg", grams: 55 },
       { label: "cup", grams: 135 },
+    ]);
+  });
+
+  it("reads RFC 4180 CSV: quotes, escaped quotes, embedded delimiters, CRLF, BOM and blank lines", () => {
+    const csv = '\ufeff"a","b","c"\r\n"1","x, ""quoted""","line\nbreak"\r\n\r\n2,plain,\n3,,"last"';
+    const out: Record<string, string>[] = [];
+    eachRow(csv, (r) => out.push(r));
+    expect(out).toEqual([
+      { a: "1", b: 'x, "quoted"', c: "line\nbreak" },
+      { a: "2", b: "plain", c: "" },
+      { a: "3", b: "", c: "last" },
     ]);
   });
 

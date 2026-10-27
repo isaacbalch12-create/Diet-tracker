@@ -2,7 +2,6 @@
  * Parsing for USDA FoodData Central CSV downloads (SR Legacy and FNDDS survey
  * foods). Nutrient amounts in these datasets are per 100 g of food.
  */
-import Papa from "papaparse";
 import type { Portion } from "../db/schema";
 import { buildUsdaLookup, type NutrientKey, type NutrientProfile } from "../nutrition/nutrients";
 
@@ -20,12 +19,73 @@ export interface NormalizedFood {
 
 type Row = Record<string, string>;
 
-function eachRow(csv: string, fn: (row: Row) => void) {
-  Papa.parse<Row>(csv, {
-    header: true,
-    skipEmptyLines: true,
-    step: (result) => fn(result.data),
-  });
+const QUOTE = 34;
+const COMMA = 44;
+const CR = 13;
+const LF = 10;
+
+/**
+ * Minimal RFC 4180 reader that hands each record to `fn` as a header-keyed
+ * object and keeps nothing else alive. The USDA nutrient file is ~36 MB with
+ * ~650k rows; a general-purpose parser needs well over 1 GB for it, which is
+ * more than a serverless function has.
+ */
+export function eachRow(csv: string, fn: (row: Row) => void) {
+  const n = csv.length;
+  let header: string[] | null = null;
+  let fields: string[] = [];
+  let i = csv.charCodeAt(0) === 0xfeff ? 1 : 0;
+  while (i < n) {
+    let value: string;
+    if (csv.charCodeAt(i) === QUOTE) {
+      value = "";
+      let start = i + 1;
+      for (;;) {
+        const q = csv.indexOf('"', start);
+        if (q === -1) {
+          value += csv.slice(start);
+          i = n;
+          break;
+        }
+        if (csv.charCodeAt(q + 1) === QUOTE) {
+          value += csv.slice(start, q + 1);
+          start = q + 2;
+          continue;
+        }
+        value += csv.slice(start, q);
+        i = q + 1;
+        break;
+      }
+      // Tolerate stray characters between a closing quote and the delimiter.
+      while (i < n && !isDelimiter(csv.charCodeAt(i))) i++;
+    } else {
+      let j = i;
+      while (j < n && !isDelimiter(csv.charCodeAt(j))) j++;
+      value = csv.slice(i, j);
+      i = j;
+    }
+    fields.push(value);
+    if (csv.charCodeAt(i) === COMMA) {
+      i++;
+      if (i < n) continue;
+      fields.push("");
+    }
+    // End of record.
+    if (csv.charCodeAt(i) === CR) i++;
+    if (csv.charCodeAt(i) === LF) i++;
+    if (!header) {
+      header = fields;
+    } else if (fields.length > 1 || fields[0] !== "") {
+      const row: Row = {};
+      for (let k = 0; k < header.length; k++) row[header[k]] = fields[k] ?? "";
+      fn(row);
+    }
+    fields = [];
+  }
+}
+
+function isDelimiter(c: number) {
+  return c === COMMA || c === LF || c === CR;
 }
 
 function rows(csv: string): Row[] {

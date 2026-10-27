@@ -100,6 +100,11 @@ limits; it is safe to run again (existing foods are updated, not duplicated).
 1. Set `ANTHROPIC_API_KEY` (and optionally `ANTHROPIC_MODEL`).
 2. Restart. **Settings → System status** shows whether AI is configured.
 
+On Netlify (credit-based plans) no key is needed: Netlify AI Gateway injects
+`ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` into functions automatically and
+bills usage in Netlify credits. Setting your own `ANTHROPIC_API_KEY` in the
+project's environment variables takes precedence over the gateway.
+
 How the AI is used — and what it is *not* trusted with:
 
 - **Meal analysis** (text or up to 4 photos): Claude splits the meal into
@@ -264,12 +269,13 @@ flow.
 
 ## Limitations and things that need configuration
 
-- **AI features require `ANTHROPIC_API_KEY`.** Without it, logging works via
-  database search and manual entry; the AI paths show a clear message. In the
-  build environment no API key was available, so the AI pipeline was verified
-  with automated tests using a scripted model client (tool loop, validation,
-  database resolution, idempotency, confirmations) but **not against the live
-  Claude API** — run a few real analyses after adding your key.
+- **AI features require `ANTHROPIC_API_KEY`** (or Netlify AI Gateway).
+  Without it, logging works via database search and manual entry; the AI paths
+  show a clear message. The AI pipeline is covered by automated tests with a
+  scripted model client (tool loop, validation, database resolution,
+  idempotency, confirmations); live text analysis was checked on the Netlify
+  deployment through AI Gateway, but photo analysis and the assistant have
+  not yet been exercised against the live API.
 - **USDA data must be imported once** (`npm run usda:import`, or the
   *Load USDA food database* button in Settings); otherwise searches rely on
   the rate-limited USDA API.
