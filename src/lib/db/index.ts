@@ -11,10 +11,13 @@ interface DbState {
   promise: Promise<Db> | null;
   override: Db | null;
   driver: "postgres" | "pglite" | null;
+  /** Connection string the current connection was opened with (it can rotate on Netlify). */
+  url: string | null;
+  close: (() => Promise<void>) | null;
 }
 
 const globalForDb = globalThis as unknown as { __dietDb?: DbState };
-const state: DbState = (globalForDb.__dietDb ??= { promise: null, override: null, driver: null });
+const state: DbState = (globalForDb.__dietDb ??= { promise: null, override: null, driver: null, url: null, close: null });
 
 export const MIGRATIONS_FOLDER = path.join(process.cwd(), "drizzle");
 
@@ -24,11 +27,14 @@ async function connectPostgres(url: string): Promise<Db> {
     import("postgres"),
   ]);
   const client = postgres(url, {
-    max: Number(process.env.DATABASE_POOL_SIZE ?? 5),
+    // Serverless instances handle one request at a time; keep their pools small.
+    max: Number(process.env.DATABASE_POOL_SIZE ?? (env.onNetlify ? 2 : 5)),
+    idle_timeout: env.onNetlify ? 20 : undefined,
     // Supabase/Neon poolers (transaction mode) do not support prepared statements.
     prepare: process.env.DATABASE_PREPARE === "true",
   });
   const db = drizzle(client, { schema });
+  state.close = () => client.end({ timeout: 5 });
   if (process.env.AUTO_MIGRATE === "true") {
     const { migrate } = await import("drizzle-orm/postgres-js/migrator");
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
@@ -54,12 +60,20 @@ async function connectPglite(dir: string): Promise<Db> {
 /** Returns the shared database connection, running migrations for the embedded database. */
 export function getDb(): Promise<Db> {
   if (state.override) return Promise.resolve(state.override);
+  const url = env.databaseUrl ?? null;
+  if (state.promise && state.url !== url) {
+    // The connection string changed (e.g. rotated credentials): reconnect.
+    const close = state.close;
+    state.promise = null;
+    state.close = null;
+    close?.().catch(() => undefined);
+  }
   if (!state.promise) {
-    const url = env.databaseUrl;
-    if (!url && (process.env.VERCEL || process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME)) {
+    if (!url && (process.env.VERCEL || env.onNetlify || process.env.AWS_LAMBDA_FUNCTION_NAME)) {
       // Serverless file systems are ephemeral: an embedded database would silently lose data.
-      return Promise.reject(new Error("DATABASE_URL is required on serverless platforms (the embedded database needs a persistent disk)."));
+      return Promise.reject(new Error("A PostgreSQL database is required on serverless platforms: set DATABASE_URL or enable Netlify Database."));
     }
+    state.url = url;
     state.promise = (url ? connectPostgres(url) : connectPglite(env.pgliteDir)).catch((err) => {
       state.promise = null;
       throw err;

@@ -3,14 +3,24 @@
  * secrets from process.env.
  */
 
-function str(name: string): string | undefined {
-  const v = process.env[name];
+/** Netlify exposes runtime env through a global in functions; fall back to process.env elsewhere. */
+function netlifyEnv(name: string): string | undefined {
+  const v = (globalThis as { Netlify?: { env?: { get?: (k: string) => string | undefined } } }).Netlify?.env?.get?.(name);
   return v && v.trim() !== "" ? v.trim() : undefined;
 }
 
+function str(name: string): string | undefined {
+  const v = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[name];
+  return v && v.trim() !== "" ? v.trim() : netlifyEnv(name);
+}
+
 export const env = {
+  /** Explicit DATABASE_URL, else the Netlify Database connection string when deployed on Netlify. */
   get databaseUrl() {
-    return str("DATABASE_URL");
+    return str("DATABASE_URL") ?? str("NETLIFY_DB_URL");
+  },
+  get onNetlify() {
+    return !!(globalThis as { Netlify?: unknown }).Netlify || str("NETLIFY") === "true" || !!str("NETLIFY_DB_URL");
   },
   get pgliteDir() {
     return str("PGLITE_DIR") ?? "./data/pglite";
@@ -38,7 +48,7 @@ export const env = {
     return str("SESSION_SECRET");
   },
   get isProduction() {
-    return process.env.NODE_ENV === "production";
+    return str("NODE_ENV") === "production";
   },
   get imageStorage(): "db" | "s3" {
     return str("IMAGE_STORAGE") === "s3" ? "s3" : "db";

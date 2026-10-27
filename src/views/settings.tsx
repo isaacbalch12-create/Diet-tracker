@@ -3,6 +3,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Bell, CheckCircle2, Database, Download, Monitor, Moon, Sun, Upload, X, XCircle } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
+import { FoodDbLoader } from "@/components/food-db-loader";
 import { GoalsForm } from "@/components/goals-form";
 import { useToast } from "@/components/toast";
 import { Badge, Button, Card, CardTitle, ErrorBanner, Field, Input, Segmented, Select } from "@/components/ui";
@@ -354,8 +355,13 @@ function StatusSection({ data }: { data: SettingsResponse }) {
         </StatusRow>
         <StatusRow ok={st.usdaFoods > 1000 ? true : "warn"} label="Food database">
           {st.usdaFoods.toLocaleString()} USDA foods stored locally{st.customFoods ? `, ${st.customFoods} custom` : ""}.
-          {st.usdaFoods < 1000 && <> Run <code>npm run usda:import</code> to load ~13,000 reference foods; until then searches use the USDA API.</>}
+          {st.usdaFoods < 1000 && <> Until it&apos;s loaded, searches fall back to the rate-limited USDA API.</>}
           {st.fdcApiKeyIsDemo && <> Online lookups use the shared DEMO_KEY (heavily rate-limited) — add a free FDC_API_KEY.</>}
+          {st.usdaFoods < 1000 && (
+            <div className="mt-2">
+              <FoodDbLoader compact />
+            </div>
+          )}
         </StatusRow>
         <StatusRow ok={st.authMode === "password" ? true : "warn"} label="Sign-in">
           {st.authMode === "password" ? "Password protected." : "Open (local development mode). Set APP_PASSWORD and SESSION_SECRET before deploying."}

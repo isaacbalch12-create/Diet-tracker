@@ -39,14 +39,19 @@ function csvFiles(zip: Uint8Array): Record<string, string> {
   return out;
 }
 
+/** Import one dataset (download → parse → upsert). Returns the number of foods stored. */
+export async function importUsdaDataset(db: Db, dataType: UsdaDataType, dir: string, log: (m: string) => void = console.log): Promise<number> {
+  const ds = USDA_DATASETS.find((d) => d.dataType === dataType);
+  if (!ds) throw new Error(`Unknown USDA dataset: ${dataType}`);
+  log(`→ ${ds.label}`);
+  const parsed = parseUsdaCsv(csvFiles(await loadZip(dir, ds.file, log)), ds.dataType);
+  log(`  parsed ${parsed.length.toLocaleString()} foods`);
+  for (let i = 0; i < parsed.length; i += 500) await upsertUsdaFoods(db, parsed.slice(i, i + 500));
+  return parsed.length;
+}
+
 export async function importUsda(db: Db, dir: string, log: (m: string) => void = console.log): Promise<number> {
   let total = 0;
-  for (const ds of USDA_DATASETS) {
-    log(`→ ${ds.label}`);
-    const parsed = parseUsdaCsv(csvFiles(await loadZip(dir, ds.file, log)), ds.dataType);
-    log(`  parsed ${parsed.length.toLocaleString()} foods`);
-    for (let i = 0; i < parsed.length; i += 400) await upsertUsdaFoods(db, parsed.slice(i, i + 400));
-    total += parsed.length;
-  }
+  for (const ds of USDA_DATASETS) total += await importUsdaDataset(db, ds.dataType, dir, log);
   return total;
 }

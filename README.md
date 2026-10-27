@@ -51,7 +51,7 @@ and starts the app on it. It never touches your real data.
 | `ANTHROPIC_MODEL` | no | Defaults to `claude-opus-5-5`. |
 | `ANTHROPIC_FALLBACKS` | no | Server-side refusal fallback is on by default; set `off` if a gateway rejects it. |
 | `FDC_API_KEY` | recommended | Free [USDA API key](https://fdc.nal.usda.gov/api-key-signup) for online lookups (branded products, foods not in the local copy). Without it the shared, heavily rate-limited `DEMO_KEY` is used. |
-| `DATABASE_URL` | hosted deploys | PostgreSQL connection string. Empty = embedded database in `PGLITE_DIR`. |
+| `DATABASE_URL` | hosted deploys | PostgreSQL connection string. Empty = embedded database in `PGLITE_DIR`. On Netlify, `NETLIFY_DB_URL` (set automatically by Netlify Database) is used instead. |
 | `PGLITE_DIR` | no | Embedded database folder (default `./data/pglite`). |
 | `AUTO_MIGRATE` | no | `true` to apply migrations on startup when using `DATABASE_URL`. |
 | `DATABASE_PREPARE` | no | Leave `false` for transaction-mode poolers (Supabase pooler, PgBouncer). |
@@ -61,11 +61,16 @@ All secrets are read only on the server; nothing is exposed to the browser.
 
 ## Database and migrations
 
-- Schema: `src/lib/db/schema.ts`; SQL migrations: `drizzle/`.
+- Schema: `src/lib/db/schema.ts`; SQL migrations: `drizzle/`, mirrored into
+  `netlify/database/migrations/` for Netlify Database.
 - **Embedded (PGlite):** migrations run automatically on startup.
 - **PostgreSQL:** run `npm run db:migrate` (with `DATABASE_URL` set) once per
   deploy, or set `AUTO_MIGRATE=true`.
-- After changing the schema: `npm run db:generate` creates a new migration.
+- **Netlify Database:** every deploy applies `netlify/database/migrations/`
+  before it is published. Never run `db:migrate` against `NETLIFY_DB_URL`.
+- After changing the schema: `npm run db:generate` creates a new migration and
+  copies it into `netlify/database/migrations/` (a unit test checks both
+  folders match). Never edit a migration that has already been deployed.
 
 Tables: `settings`, `goals` (versioned by effective date), `weight_entries`,
 `meals`, `meal_items`, `meal_images`, `meal_analyses` (AI drafts),
@@ -84,8 +89,11 @@ Tables: `settings`, `goals` (versioned by effective date), `weight_entries`,
 Search is local full-text search (fast, offline, no rate limits). If local
 results are thin, or you search branded products, the app queries the USDA
 API and caches the results. You can also create custom foods from a nutrition
-label. To load the foods into a hosted database, run the import with
-`DATABASE_URL` set.
+label. To load the foods into a hosted database, either run the import with
+`DATABASE_URL` set, or sign in and use **Settings → Load USDA food database**
+(also offered on the food search tab while the database is empty). The button
+imports one dataset per request so each stays well under serverless time
+limits; it is safe to run again (existing foods are updated, not duplicated).
 
 ## AI setup (Claude)
 
@@ -140,7 +148,29 @@ Put it behind HTTPS (Caddy, nginx, Cloudflare Tunnel…) and back up
 `docker-compose.yml` are included (`docker compose up -d --build`, data in
 `./data`).
 
-### Option B — Vercel (or any serverless host) + hosted PostgreSQL
+### Option B — Netlify + Netlify Database
+
+The repo is ready for Netlify: `netlify.toml` sets the build, Netlify's
+Next.js runtime is applied automatically, and `@netlify/database` in
+`package.json` makes Netlify provision a Postgres database and apply
+`netlify/database/migrations/` on each deploy (requires a credit-based
+Netlify plan).
+
+1. Create a Netlify project from this repository (or `netlify init`).
+2. In *Project configuration → Environment variables* add `APP_PASSWORD`,
+   `SESSION_SECRET` (mark both secret), and `ANTHROPIC_API_KEY` /
+   `FDC_API_KEY` when you have them. Scopes must include Functions.
+3. Deploy. Environment variable changes only take effect after the next
+   deploy (*Deploys → Trigger deploy*).
+4. Sign in and click **Settings → Load USDA food database** once.
+
+Netlify notes: synchronous functions stop after 60 s, so very long AI
+analyses can time out (retry, or use a shorter description); request bodies
+are limited to 6 MB. Photos are resized in the browser and uploaded one at a
+time (5 MB cap each), but a backup that contains many photos may be too large
+to restore through the browser.
+
+### Option C — Vercel (or any serverless host) + hosted PostgreSQL
 
 1. Create a Postgres database (Supabase, Neon, …) and copy its connection
    string (for Supabase use the pooler URL; keep `DATABASE_PREPARE=false`).
@@ -240,8 +270,9 @@ flow.
   with automated tests using a scripted model client (tool loop, validation,
   database resolution, idempotency, confirmations) but **not against the live
   Claude API** — run a few real analyses after adding your key.
-- **USDA data must be imported once** (`npm run usda:import`); otherwise
-  searches rely on the rate-limited USDA API.
+- **USDA data must be imported once** (`npm run usda:import`, or the
+  *Load USDA food database* button in Settings); otherwise searches rely on
+  the rate-limited USDA API.
 - **Reminders** are browser notifications while the app (or installed PWA) is
   open; true background push notifications are not implemented.
 - Single user only; no multi-account support.

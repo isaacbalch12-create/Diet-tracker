@@ -4,6 +4,7 @@ import { Camera, Clock, Database, ImagePlus, Loader2, MessageSquareText, RotateC
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { FoodDbLoader } from "@/components/food-db-loader";
 import { FoodResults } from "@/components/food-search";
 import { ItemsEditor } from "@/components/items-editor";
 import { MacroLine } from "@/components/nutrition";
@@ -263,10 +264,19 @@ function SavedAndRecent({ eatenAt, category, onLogged }: { eatenAt: () => string
 export function LogFoodView({ initialDate, initialText }: { initialDate: string | null; initialText: string | null }) {
   const settingsQ = useSettings();
   if (!settingsQ.data) return null;
-  return <LogFood settings={settingsQ.data.settings} today={settingsQ.data.today} aiConfigured={settingsQ.data.status.aiConfigured} initialDate={initialDate} initialText={initialText} />;
+  return (
+    <LogFood
+      settings={settingsQ.data.settings}
+      today={settingsQ.data.today}
+      aiConfigured={settingsQ.data.status.aiConfigured}
+      foodsLoaded={settingsQ.data.status.usdaFoods >= 1000}
+      initialDate={initialDate}
+      initialText={initialText}
+    />
+  );
 }
 
-function LogFood({ settings, today, aiConfigured, initialDate, initialText }: { settings: SettingsJ; today: string; aiConfigured: boolean; initialDate: string | null; initialText: string | null }) {
+function LogFood({ settings, today, aiConfigured, foodsLoaded, initialDate, initialText }: { settings: SettingsJ; today: string; aiConfigured: boolean; foodsLoaded: boolean; initialDate: string | null; initialText: string | null }) {
   const router = useRouter();
   const toast = useToast();
   const invalidate = useInvalidateData();
@@ -547,6 +557,12 @@ function LogFood({ settings, today, aiConfigured, initialDate, initialText }: { 
           )}
           {mode === "search" && (
             <div className="flex flex-col gap-3">
+              {foodsLoaded === false && (
+                <div className="rounded-lg border border-line bg-surface-2 p-3 text-sm text-fg-2">
+                  <p className="mb-2">The local food database is empty, so searches use the rate-limited USDA API. Load it once for fast, offline-quality matching:</p>
+                  <FoodDbLoader compact />
+                </div>
+              )}
               <Input aria-label="Search foods" placeholder="Search the USDA food database…" value={searchQ} onChange={(e) => setSearchQ(e.target.value)} autoFocus />
               <FoodResults
                 query={searchQ}

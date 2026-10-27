@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { jwtVerify, SignJWT } from "jose";
-import { env } from "./env";
+import { authMode, env } from "./env";
 
 export const SESSION_COOKIE = "dt_session";
 export const SESSION_MAX_AGE_S = 60 * 60 * 24 * 30;
@@ -51,4 +51,24 @@ export function loginRateLimited(ip: string, now = Date.now()): boolean {
 }
 export function resetLoginAttempts(ip: string) {
   attempts.delete(ip);
+}
+
+function readCookie(header: string | null, name: string): string | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return undefined;
+}
+
+/**
+ * Authorization for API handlers. The proxy already enforces this; handlers
+ * check again so data stays protected even if a hosting platform skips the proxy.
+ */
+export async function requestAuth(req: Request): Promise<"ok" | "unauthorized" | "misconfigured"> {
+  const mode = authMode();
+  if (mode === "open") return "ok";
+  if (mode === "misconfigured") return "misconfigured";
+  return (await verifySessionToken(readCookie(req.headers.get("cookie"), SESSION_COOKIE))) ? "ok" : "unauthorized";
 }

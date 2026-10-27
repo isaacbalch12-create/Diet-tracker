@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { errorResponse } from "@/lib/api";
+import { assertAuthorized, errorResponse } from "@/lib/api";
 import { runAssistant, type AssistantEvent } from "@/lib/ai/assistant";
 import { getAnthropic } from "@/lib/ai/client";
 import { getDb } from "@/lib/db";
@@ -17,6 +17,7 @@ const schema = z.object({
 export async function POST(req: Request) {
   let input: z.infer<typeof schema>;
   try {
+    await assertAuthorized(req);
     input = schema.parse(await req.json());
     getAnthropic(); // fail fast with a clear error when AI is not configured
   } catch (err) {

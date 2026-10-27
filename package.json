@@ -10,7 +10,7 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "db:generate": "drizzle-kit generate",
+    "db:generate": "drizzle-kit generate && node scripts/sync-netlify-migrations.mjs",
     "db:migrate": "tsx scripts/migrate.ts",
     "usda:import": "tsx scripts/import-usda.ts",
     "demo:seed": "tsx scripts/seed-demo.ts",
@@ -19,6 +19,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
     "@electric-sql/pglite": "^0.5.12",
+    "@netlify/database": "^2.0.1",
     "@tanstack/react-query": "^5.105.0",
     "aws4fetch": "^1.0.20",
     "clsx": "^2.1.1",

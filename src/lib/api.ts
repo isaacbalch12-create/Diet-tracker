@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
+import { requestAuth } from "./auth";
 import { getDb, type Db } from "./db";
 import type { Settings } from "./db/schema";
 import { AppError } from "./errors";
@@ -10,6 +11,12 @@ export interface Ctx {
   db: Db;
   settings: Settings;
   today: LocalDate;
+}
+
+export async function assertAuthorized(req: Request): Promise<void> {
+  const auth = await requestAuth(req);
+  if (auth === "misconfigured") throw new AppError(503, "auth_not_configured", "Server is missing APP_PASSWORD and/or SESSION_SECRET.");
+  if (auth === "unauthorized") throw new AppError(401, "unauthorized", "Please sign in");
 }
 
 export function errorResponse(err: unknown): NextResponse {
@@ -32,6 +39,7 @@ export function errorResponse(err: unknown): NextResponse {
 export function route<P = Record<string, string>>(fn: (req: Request, ctx: Ctx, params: P) => Promise<Response | unknown>) {
   return async (req: Request, context: { params: Promise<P> }) => {
     try {
+      await assertAuthorized(req);
       const db = await getDb();
       const settings = await getSettings(db);
       const params = (await context?.params) ?? ({} as P);
