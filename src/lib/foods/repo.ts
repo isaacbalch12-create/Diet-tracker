@@ -1,4 +1,4 @@
-import { and, count, eq, inArray, sql } from "drizzle-orm";
+import { and, count, eq, inArray, type SQL, sql } from "drizzle-orm";
 import type { DbOrTx } from "../db";
 import { foods, type Food, type Portion } from "../db/schema";
 import { notFound } from "../errors";
@@ -53,27 +53,50 @@ function toResult(row: Food & { score?: number }): FoodSearchResult {
   };
 }
 
-async function ftsSearch(db: DbOrTx, tokens: string[], mode: "and" | "or", limit: number): Promise<FoodSearchResult[]> {
+/**
+ * tsquery for one token. The word that may still be being typed also matches as
+ * a raw prefix ("chick" → chicken) rather than a stemmed one: "cooked" stems to
+ * "cook", and "cook:*" would match "cookies".
+ */
+function tokenQuery(token: string, prefix: boolean): SQL {
+  const exact = sql`to_tsquery('english', ${token})`;
+  return prefix ? sql`(${exact} || to_tsquery('simple', ${`${token}:*`}))` : exact;
+}
+
+function combinedQuery(tokens: string[], mode: "and" | "or", prefixToken: string | undefined): SQL {
+  return sql`(${sql.join(
+    tokens.map((t) => tokenQuery(t, t === prefixToken)),
+    sql.raw(mode === "and" ? " && " : " || "),
+  )})`;
+}
+
+async function ftsSearch(db: DbOrTx, tokens: string[], mode: "and" | "or", limit: number, prefixToken = tokens.at(-1)): Promise<FoodSearchResult[]> {
   if (tokens.length === 0) return [];
-  const joiner = mode === "and" ? " & " : " | ";
-  // Prefix-match only the last word (it may still be being typed): "cooked:*"
-  // would otherwise match "cookies".
-  const prefixQ = sql`to_tsquery('english', ${tokens.map((t, i) => (i === tokens.length - 1 ? `${t}:*` : t)).join(joiner)})`;
+  const matchQ = combinedQuery(tokens, mode, prefixToken);
   // Whole-word matches outrank prefix-only matches ("egg" should beat "eggplant").
   const exactQ = sql`to_tsquery('english', ${tokens.join(" | ")})`;
   const phrase = `^${tokens.join("\\W+")}s?\\M`;
   const score = sql<number>`(
-      ts_rank_cd(${foods.searchVector}, ${prefixQ})
+      ts_rank_cd(${foods.searchVector}, ${matchQ})
       + 2 * ts_rank_cd(${foods.searchVector}, ${exactQ})
       + case when ${foods.description} ~* ${phrase} then 0.5 else 0 end
     ) * ${DATA_TYPE_WEIGHT} / (1 + char_length(${foods.description}) / 60.0)`;
   const rows = await db
     .select({ food: foods, score })
     .from(foods)
-    .where(sql`${foods.searchVector} @@ ${prefixQ}`)
+    .where(sql`${foods.searchVector} @@ ${matchQ}`)
     .orderBy(sql`${score} desc`, foods.description)
     .limit(limit);
   return rows.map((r) => toResult({ ...r.food, score: Number(r.score) }));
+}
+
+/** How many foods match each token on its own. */
+async function tokenFrequencies(db: DbOrTx, tokens: string[], prefixToken: string | undefined): Promise<number[]> {
+  const fields = Object.fromEntries(
+    tokens.map((t, i) => [`t${i}`, sql<number>`count(*) filter (where ${foods.searchVector} @@ ${tokenQuery(t, t === prefixToken)})`]),
+  );
+  const [row] = await db.select(fields).from(foods);
+  return tokens.map((_, i) => Number(row?.[`t${i}`] ?? 0));
 }
 
 export async function countFoods(db: DbOrTx, source?: "usda" | "custom"): Promise<number> {
@@ -82,8 +105,9 @@ export async function countFoods(db: DbOrTx, source?: "usda" | "custom"): Promis
 }
 
 export async function searchLocalFoods(db: DbOrTx, query: string, limit = 10): Promise<FoodSearchResult[]> {
-  const tokens = queryTokens(query);
+  const tokens = [...new Set(queryTokens(query))];
   if (tokens.length === 0) return [];
+  const prefixToken = tokens.at(-1);
   const out: FoodSearchResult[] = [];
   const seen = new Set<string>();
   const add = (rows: FoodSearchResult[]) => {
@@ -95,15 +119,24 @@ export async function searchLocalFoods(db: DbOrTx, query: string, limit = 10): P
       }
     }
   };
-  add(await ftsSearch(db, tokens, "and", limit));
+  add(await ftsSearch(db, tokens, "and", limit, prefixToken));
   if (out.length >= Math.min(limit, 5) || tokens.length === 1) return out;
-  // Relax gradually: all-but-one token (keeping more of the query beats matching
-  // only common words like "cooked"), then the leading word, then any word.
-  for (let drop = tokens.length - 1; drop >= 0 && out.length < limit; drop--) {
-    add(await ftsSearch(db, tokens.filter((_, i) => i !== drop), "and", limit));
+  // Relax by dropping the least informative words first: words that match
+  // nothing (typos), then the most common ones ("cooked", "raw"), so that
+  // "cooked oatmeal" falls back to oatmeal rather than to everything cooked.
+  const freq = await tokenFrequencies(db, tokens, prefixToken);
+  const dropRank = (n: number) => (n === 0 ? Number.MAX_SAFE_INTEGER : n);
+  const dropOrder = tokens
+    .map((t, i) => ({ t, rank: dropRank(freq[i]) }))
+    .sort((a, b) => b.rank - a.rank)
+    .map((x) => x.t);
+  let kept = tokens;
+  for (const t of dropOrder.slice(0, -1)) {
+    if (out.length >= limit) break;
+    kept = kept.filter((k) => k !== t);
+    add(await ftsSearch(db, kept, "and", limit, prefixToken));
   }
-  if (out.length < limit) add(await ftsSearch(db, tokens.slice(0, 1), "and", limit));
-  if (out.length < limit) add(await ftsSearch(db, tokens, "or", limit));
+  if (out.length < limit) add(await ftsSearch(db, tokens, "or", limit, prefixToken));
   return out;
 }
 

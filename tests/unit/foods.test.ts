@@ -95,6 +95,28 @@ describe("food search", () => {
     expect(r[0].description).toBe("Egg, whole, fried with oil");
   });
 
+  it("does not let common or stemmed words swamp the specific food", async () => {
+    const extra = ["Oatmeal, NFS", "Cookie, oatmeal", "Chard, cooked", "Taro, cooked", "Rice, cooked, NFS"].map((description, i) => ({
+      externalId: `9${i}`,
+      dataType: "fndds" as const,
+      description,
+      brand: null,
+      category: null,
+      nutrientsPer100g: { calories: 100 },
+      portions: [],
+    }));
+    await upsertUsdaFoods(db, extra);
+    // "cooked" stems to "cook"; a stemmed prefix would also match "cookie".
+    for (const q of ["oatmeal cooked", "cooked oatmeal"]) {
+      const r = await searchLocalFoods(db, q);
+      expect(r[0].description, q).toBe("Oatmeal, NFS");
+    }
+    expect((await searchLocalFoods(db, "rice cooked"))[0].description).toBe("Rice, cooked, NFS");
+    // The word being typed still matches as a prefix; unknown words are dropped.
+    expect((await searchLocalFoods(db, "oatm"))[0].description).toBe("Oatmeal, NFS");
+    expect((await searchLocalFoods(db, "xyzzy oatmeal"))[0].description).toBe("Oatmeal, NFS");
+  });
+
   it("upserts idempotently by FDC id", async () => {
     await upsertUsdaFoods(db, parseUsdaCsv(files, "fndds"));
     const r = await searchLocalFoods(db, "egg", 10);
