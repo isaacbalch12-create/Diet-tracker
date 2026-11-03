@@ -63,3 +63,39 @@ export interface HistoryDay {
   morningKg: number | null;
   nightKg: number | null;
 }
+
+// ---------------------------------------------------------------------------
+// Unified tracker (training, running, health, routines, goals)
+
+import type { todayOverview } from "../services/today";
+import type { GoalView } from "../services/goals";
+import type { computeInsights } from "../services/insights";
+import type { trainingOverview, getWorkout, listWorkouts, listExercises, exerciseDetail, trainingRecords, trainingAnalytics, listTemplates } from "../services/training";
+import type { runningOverview } from "../services/running";
+import type { healthOverview, listConnections, IngestResult } from "../services/health";
+import type { getRoutineDay, routineStats } from "../services/routines";
+import type { JournalEntry, MobilityRoutine, RoutineTemplate, WorkoutTemplate } from "../db/schema";
+import type { LiftlogImportSummary } from "../services/liftlog-import";
+
+export type TodayJ = Jsonify<Awaited<ReturnType<typeof todayOverview>>>;
+export type GoalJ2 = Jsonify<GoalView>;
+export type InsightsJ = Jsonify<Awaited<ReturnType<typeof computeInsights>>>;
+export type TrainingOverviewJ = Jsonify<Awaited<ReturnType<typeof trainingOverview>>>;
+export type WorkoutDetailJ = Jsonify<Awaited<ReturnType<typeof getWorkout>>>;
+export type WorkoutSummaryJ = Jsonify<Awaited<ReturnType<typeof listWorkouts>>[number]>;
+export type ExerciseListItemJ = Jsonify<Awaited<ReturnType<typeof listExercises>>[number]>;
+export type ExerciseDetailJ = Jsonify<Awaited<ReturnType<typeof exerciseDetail>>>;
+export type RecordsJ = Jsonify<Awaited<ReturnType<typeof trainingRecords>>>;
+export type TrainingAnalyticsJ = Jsonify<Awaited<ReturnType<typeof trainingAnalytics>>>;
+export type WorkoutTemplateJ = Jsonify<WorkoutTemplate>;
+export type TemplatesListJ = Jsonify<Awaited<ReturnType<typeof listTemplates>>>;
+export type RunningJ = Jsonify<Awaited<ReturnType<typeof runningOverview>>>;
+export type VitalsJ = Jsonify<Awaited<ReturnType<typeof healthOverview>>>;
+export type ConnectionJ = Jsonify<Awaited<ReturnType<typeof listConnections>>[number]>;
+export type IngestResultJ = IngestResult;
+export type RoutineDayJ = Jsonify<Awaited<ReturnType<typeof getRoutineDay>>> & { today: string };
+export type RoutineStatsJ = Jsonify<Awaited<ReturnType<typeof routineStats>>>;
+export type JournalEntryJ = Jsonify<JournalEntry>;
+export type MobilityRoutineJ = Jsonify<MobilityRoutine>;
+export type RoutineTemplateJ = Jsonify<RoutineTemplate>;
+export type LiftlogImportSummaryJ = LiftlogImportSummary;

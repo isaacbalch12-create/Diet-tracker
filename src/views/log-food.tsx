@@ -302,7 +302,7 @@ function LogFood({ settings, today, aiConfigured, foodsLoaded, initialDate, init
   }, [text, photos, mode]);
 
   const reviewing = draft !== null;
-  const backTo = time.date === today ? "/" : `/?date=${time.date}`;
+  const backTo = time.date === today ? "/nutrition" : `/nutrition?date=${time.date}`;
 
   const startDraft = (d: MealDraft, a: AnalysisView | null) => {
     setDraft(d);

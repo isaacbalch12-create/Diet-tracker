@@ -19,6 +19,13 @@ import { listGoals, toGoalVersion } from "../services/settings";
 import { daySummary, nutritionDays } from "../services/stats";
 import { listWeights, weightOverview } from "../services/weights";
 import { AppError } from "../errors";
+import { exerciseDetail, listExercises, trainingAnalytics, trainingRecords } from "../services/training";
+import { runningOverview } from "../services/running";
+import { healthOverview } from "../services/health";
+import { routineStats } from "../services/routines";
+import { goalsWithProgress } from "../services/goals";
+import { computeInsights } from "../services/insights";
+import { fromMeters } from "../running/stats";
 
 export interface ToolContext {
   db: Db;
@@ -95,6 +102,28 @@ export const ASSISTANT_TOOLS: Anthropic.Beta.BetaTool[] = [
     rangeProps,
     ["start_date", "end_date"],
   ),
+  tool(
+    "get_training_summary",
+    "Strength training for a date range: workouts, working sets, reps and volume (user's weight unit), workouts and volume per week, sets per muscle group per week, and per exercise: sessions, estimated-1RM trend (% per month, an estimate), plateau status, current vs. peak; plus personal records set in the range. There is no workout duration data by design.",
+    rangeProps,
+    ["start_date", "end_date"],
+  ),
+  tool("get_exercise_history", "Full history and statistics for one exercise found by (partial) name: best sets, estimated 1RM trend and plateau check, rep records, and the most recent 12 sessions with every set.", { exercise_name: { type: "string" } }, ["exercise_name"]),
+  tool(
+    "get_running_summary",
+    "Daily running for a date range: per-day status (done / short / rest / recovery / missed / pending), current and longest streaks (planned rest/recovery days never break a streak), consecutive days without rest, consistency % (rest days excluded), weekly and monthly distance (user's distance unit), run types, effort, and records. No pace or duration data by design.",
+    rangeProps,
+    ["start_date", "end_date"],
+  ),
+  tool(
+    "get_health_summary",
+    "Phone health data for a date range: steps, sleep (hours, with stages when recorded), sleep score (only when a connected device/app supplied one, with its provider), resting heart rate, HRV and active energy — daily values, averages over days with data, weekly averages, trends, sources and last sync time. Days without data are missing, not zero.",
+    rangeProps,
+    ["start_date", "end_date"],
+  ),
+  tool("get_routines_summary", "Morning and nightly routine completion for a date range: completion %, streaks, weekly rates, per-activity completion rates (most and least consistent), reading totals and journaling days. Journal text is private and not included.", rangeProps, ["start_date", "end_date"]),
+  tool("get_goals_progress", "Every active and paused goal with its current-period value vs. target (in the user's units), status, streak, success rate and recent history.", {}, []),
+  tool("get_insights", "Pre-computed, labeled insights across all areas for the last N days (measured / estimate / observation), plus daily, weekly and period summaries.", { days: { type: "integer", description: "7–365" } }, ["days"]),
   tool(
     "propose_action",
     "Propose a change to the user's records. Nothing is changed until the user presses Confirm in the app. Use for: log_weight (weight_value, weight_unit, period, optional date), update_goals (any of calories/protein/carbs/fat; omitted ones keep their current value), delete_meal (meal_id), delete_weight_entry (weight_entry_id), open_food_logger (food_text — opens the food logger prefilled so the user can review an AI estimate). Set unused fields to null.",
@@ -397,6 +426,137 @@ export async function runAssistantTool(ctx: ToolContext, name: string, input: un
         rough_maintenance_estimate: rel.energyBalance && { kcal_per_day: Math.round(rel.energyBalance.estimatedMaintenance / 50) * 50, avg_calories: r0(rel.energyBalance.avgCalories), weight_trend_per_week: w(rel.energyBalance.weightSlopePerWeekKg, unit), caveat: "Very rough: assumes complete logging and ~7,700 kcal/kg." },
         observations: rel.observations.map((o) => o.text),
       };
+    }
+    case "get_training_summary": {
+      const r = rangeS.parse(raw);
+      const range = { start: r.start_date, end: r.end_date };
+      const [a, rec] = await Promise.all([trainingAnalytics(ctx.db, ctx.settings, range, ctx.today), trainingRecords(ctx.db, ctx.settings, range)]);
+      const unit = ctx.settings.weightUnit;
+      return {
+        unit,
+        totals: { workouts: a.totals.workouts, working_sets: a.totals.sets, reps: a.totals.reps, volume: r0(fromKg(a.totals.volumeKg, unit)), exercises: a.totals.exercises },
+        workouts_per_week: a.workoutsPerWeek.map((x) => ({ week: x.date, workouts: x.value })),
+        volume_per_week: a.volumePerWeek.map((x) => ({ week: x.date, volume: x.value })),
+        muscle_groups: a.muscles.map((m) => ({ muscle: m.muscle, sets: r1(m.sets), sets_per_week: r1(m.setsPerWeek) })),
+        exercises: a.exercises.slice(0, 25).map((e) => ({
+          exercise: e.name,
+          sessions_in_range: e.sessionsInRange,
+          e1rm_trend_pct_per_month_estimate: e.trend.status === "ok" ? r1(e.trend.pctPerMonth * 100) : `insufficient data: ${e.trend.reason}`,
+          plateau_check: `${e.plateau.status}: ${e.plateau.explanation}`,
+          current_vs_peak_pct: e.relative ? r0(e.relative.ratio * 100) : null,
+        })),
+        records_in_range: rec.events.filter((e) => e.type !== "milestone").slice(0, 30).map((e) => ({ date: e.date, exercise: e.exerciseName, record: e.label, value: e.type === "reps" ? `${e.reps} reps at ${w(e.weightKg, unit)}` : e.type.includes("olume") ? r0(fromKg(e.value, unit)) : w(e.value, unit) })),
+      };
+    }
+    case "get_exercise_history": {
+      const q = z.object({ exercise_name: z.string().min(1).max(100) }).parse(raw).exercise_name.toLowerCase();
+      const all = await listExercises(ctx.db);
+      const match = all.filter((e) => e.name.toLowerCase().includes(q)).sort((a, b) => b.setCount - a.setCount)[0];
+      if (!match) return { error: `No exercise matching "${q}". Known exercises with history: ${all.filter((e) => e.setCount > 0).map((e) => e.name).slice(0, 40).join(", ") || "none"}.` };
+      const d = await exerciseDetail(ctx.db, match.id, ctx.settings, ctx.today);
+      const unit = ctx.settings.weightUnit;
+      return {
+        exercise: match.name,
+        unit,
+        sessions: d.stats.sessionCount,
+        heaviest: d.stats.heaviest && { weight: w(d.stats.heaviest.value, unit), reps: d.stats.heaviest.reps },
+        best_estimated_1rm: d.stats.bestE1rm && { value: w(d.stats.bestE1rm.value, unit), from: `${w(d.stats.bestE1rm.weightKg, unit)} × ${d.stats.bestE1rm.reps}`, confidence: d.stats.bestE1rm.confidence, note: "estimate" },
+        trend: d.trend.status === "ok" ? { pct_per_month_estimate: r1(d.trend.pctPerMonth * 100), sessions: d.trend.sessions } : d.trend.reason,
+        plateau_check: `${d.plateau.status}: ${d.plateau.explanation}`,
+        rep_records: d.stats.repRecords.slice(0, 12).map((x) => ({ weight: w(x.weightKg, unit), most_reps: x.reps })),
+        recent_sessions: d.history.slice(0, 12).map((h) => ({ date: h.date, sets: h.sets.map((x) => `${w(x.weightKg, unit)}×${x.reps}`).join(", ") })),
+      };
+    }
+    case "get_running_summary": {
+      const r = rangeS.parse(raw);
+      const o = await runningOverview(ctx.db, { start: r.start_date, end: r.end_date }, ctx.settings, ctx.today);
+      const du = ctx.settings.distanceUnit;
+      const dist = (m: number | null | undefined) => (m == null ? null : r2(fromMeters(m, du)));
+      return {
+        distance_unit: du,
+        daily_goal: o.goal ? { minimum_distance: dist(o.goal.minDistanceM), since: o.goal.startDate } : "no daily run goal set",
+        streaks: { current_days: o.streaks.current, longest_days: o.streaks.longest, consecutive_days_without_rest: o.streaks.daysWithoutRest },
+        consistency: { pct: pct(o.consistency.pct), run_days: o.consistency.done, short_days: o.consistency.short, missed: o.consistency.missed, rest: o.consistency.rest, recovery: o.consistency.recovery },
+        totals: { distance: dist(o.totals.distanceM), runs: o.totals.runs, avg_distance_per_run: dist(o.totals.avgDistanceM), avg_effort_1_to_10: r1(o.totals.avgEffort) },
+        weekly: o.weekly.map((x) => ({ week: x.start, distance: dist(x.distanceM), run_days: x.runDays })),
+        days: o.days.length <= 62 ? o.days.map((d) => ({ date: d.date, status: d.status, distance: d.hasDistance ? dist(d.distanceM) : null })) : "range too long for per-day detail; use weekly",
+        by_type: o.byType.map((x) => ({ type: x.type, runs: x.runs, distance: dist(x.distanceM) })),
+        records: { longest_run: o.records.longestRun && { distance: dist(o.records.longestRun.distanceM), date: o.records.longestRun.date }, best_week: o.records.bestWeek && { week: o.records.bestWeek.start, distance: dist(o.records.bestWeek.distanceM) } },
+      };
+    }
+    case "get_health_summary": {
+      const r = rangeS.parse(raw);
+      const o = await healthOverview(ctx.db, { start: r.start_date, end: r.end_date }, ctx.settings, ctx.today);
+      const out: Record<string, unknown> = { last_sync: o.sync.lastSyncAt, active_connections: o.sync.activeConnections };
+      for (const [k, m] of Object.entries(o.metrics)) {
+        if (!m.loggedDays) {
+          out[k] = k === "sleep_score" ? "no sleep score supplied by any connected source" : "no data";
+          continue;
+        }
+        const conv = (v: number | null) => (v == null ? null : k === "sleep" ? r2(v / 60) : r0(v));
+        out[k] = {
+          unit: k === "sleep" ? "hours" : m.unit,
+          days_with_data: m.loggedDays,
+          average: conv(m.average),
+          min: conv(m.min),
+          max: conv(m.max),
+          trend_per_week: m.trendPerWeek == null ? null : k === "sleep" ? r2(m.trendPerWeek / 60) : r0(m.trendPerWeek),
+          weekly_average: m.weekly.map((x) => ({ week: x.start, average: conv(x.average), days: x.days })),
+          sources: m.sources,
+          daily: m.days.length <= 45 ? m.days.filter((d) => d.value != null).map((d) => ({ date: d.date, value: conv(d.value), ...(k === "sleep_score" ? { provider: d.origin } : {}) })) : undefined,
+        };
+      }
+      return out;
+    }
+    case "get_routines_summary": {
+      const r = rangeS.parse(raw);
+      const st = await routineStats(ctx.db, { start: r.start_date, end: r.end_date }, ctx.settings.weekStartsOn, ctx.today);
+      const slot = (x: typeof st.morning) => ({
+        tracked_days: x.trackedDays,
+        fully_complete_days: x.completeDays,
+        completion_pct: pct(x.completionPct),
+        average_pct_of_activities: pct(x.avgPct),
+        streak: x.streak,
+        activities: x.activities.map((a) => ({ activity: a.title, kind: a.kind, required: a.required, done_days: a.doneDays, eligible_days: a.eligibleDays, rate_pct: pct(a.rate) })),
+      });
+      return { morning: slot(st.morning), night: slot(st.night), reading: st.reading, journaling_days: st.journaling };
+    }
+    case "get_goals_progress": {
+      const goals = await goalsWithProgress(ctx.db, ctx.settings, ctx.today, { includeLinked: true, recent: 14 });
+      const unit = ctx.settings.weightUnit;
+      const du = ctx.settings.distanceUnit;
+      const conv = (v: number | null | undefined, u: string) => {
+        if (v == null) return null;
+        if (u === "kg" || u === "kg_per_week") return r2(fromKg(v, unit));
+        if (u === "m") return r2(fromMeters(v, du));
+        if (u === "min") return r2(v / 60);
+        if (u === "fraction") return r0(v * 100);
+        return r1(v);
+      };
+      const label = (u: string) => (u === "kg" ? unit : u === "kg_per_week" ? `${unit}/week` : u === "m" ? du : u === "min" ? "hours" : u === "fraction" ? "%" : u);
+      return goals
+        .filter((g) => g.status === "active" || g.status === "paused")
+        .map((g) => ({
+          goal: g.title,
+          metric: g.metric,
+          subject: g.subject,
+          period: g.period,
+          status: g.status,
+          comparator: g.comparator,
+          unit: g.aggregation === "count" ? "days" : label(g.unit),
+          target: g.aggregation === "count" ? g.current?.target : conv(g.current?.target ?? g.targetValue, g.unit),
+          target_max: g.targetMax == null ? null : conv(g.current?.targetMax ?? g.targetMax, g.unit),
+          current_value: g.aggregation === "count" ? g.current?.value : conv(g.current?.value, g.unit),
+          current_period_status: g.current?.status ?? null,
+          streak: g.streak,
+          success_rate_pct: pct(g.successRate),
+          periods_judged: g.judged,
+        }));
+    }
+    case "get_insights": {
+      const days = z.number().int().min(7).max(365).parse(raw.days);
+      const res = await computeInsights(ctx.db, ctx.settings, ctx.today, days);
+      return { insights: res.insights.map((i) => ({ area: i.domain, kind: i.kind, title: i.title, detail: i.detail })), summaries: res.summaries };
     }
     case "propose_action":
       return proposeAction(ctx, raw);

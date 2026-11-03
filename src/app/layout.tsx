@@ -3,10 +3,10 @@ import "./globals.css";
 import { Providers } from "@/components/providers";
 
 export const metadata: Metadata = {
-  title: { default: "Diet Tracker", template: "%s · Diet Tracker" },
-  description: "Personal nutrition, macro and weight tracker with AI food logging.",
-  applicationName: "Diet Tracker",
-  appleWebApp: { capable: true, title: "Diet Tracker", statusBarStyle: "default" },
+  title: { default: "Momentum", template: "%s · Momentum" },
+  description: "Personal nutrition, training, running, health and routine tracker.",
+  applicationName: "Momentum",
+  appleWebApp: { capable: true, title: "Momentum", statusBarStyle: "default" },
   robots: { index: false, follow: false },
 };
 

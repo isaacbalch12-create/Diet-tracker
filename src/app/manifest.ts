@@ -2,9 +2,9 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Diet Tracker",
-    short_name: "Diet",
-    description: "Nutrition, macro and weight tracking with AI food logging",
+    name: "Momentum",
+    short_name: "Momentum",
+    description: "Nutrition, training, daily running, steps, sleep and routines in one place",
     start_url: "/",
     display: "standalone",
     background_color: "#f6f6f3",

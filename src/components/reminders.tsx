@@ -29,7 +29,7 @@ export function ReminderScheduler({ settings }: { settings: SettingsJ }) {
         try {
           const day = await api.get<DaySummaryJ>("/api/day");
           if (!day.weights[period] && Notification.permission === "granted") {
-            new Notification("Diet Tracker", { body: period === "morning" ? "Time for your morning weigh-in." : "Log your night weight before bed.", icon: "/icon.svg", tag: `weigh-${period}` });
+            new Notification("Momentum", { body: period === "morning" ? "Time for your morning weigh-in." : "Log your night weight before bed.", icon: "/icon.svg", tag: `weigh-${period}` });
           }
         } catch {
           // ignore — reminders are best-effort

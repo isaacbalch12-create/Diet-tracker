@@ -3,9 +3,11 @@ import { SESSION_COOKIE, verifySessionToken } from "./lib/auth";
 import { authMode } from "./lib/env";
 
 const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health", "/manifest.webmanifest", "/icon.svg"];
+/** Token-authenticated (Authorization: Bearer) endpoints called by phones, not browsers. */
+const TOKEN_PATHS = ["/api/ingest/health"];
 
 function isPublic(pathname: string) {
-  return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`)) || TOKEN_PATHS.includes(pathname);
 }
 
 export async function proxy(request: NextRequest) {
@@ -14,7 +16,8 @@ export async function proxy(request: NextRequest) {
 
   // CSRF defense in depth (the session cookie is also SameSite=Lax): state-changing
   // API requests must come from this origin.
-  if (isApi && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+  // Bearer-token endpoints carry no ambient credentials, so they are exempt.
+  if (isApi && !TOKEN_PATHS.includes(pathname) && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
     const origin = request.headers.get("origin");
     const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
     let originHost: string | null = null;

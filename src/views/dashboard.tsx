@@ -37,7 +37,7 @@ function CaloriesHero({ day }: { day: DaySummaryJ }) {
         </div>
       ) : (
         <p className="mt-2 text-sm text-muted">
-          <Link href="/settings#goals" className="text-accent underline-offset-2 hover:underline">
+          <Link href="/goals#nutrition-targets" className="text-accent underline-offset-2 hover:underline">
             Set daily goals
           </Link>{" "}
           to track what&apos;s remaining.
@@ -133,7 +133,7 @@ export function DashboardView({ initialDate }: { initialDate: string | null }) {
 
   const changeDate = (d: string) => {
     setDate(d);
-    router.replace(d === today ? "/" : `/?date=${d}`, { scroll: false });
+    router.replace(d === today ? "/nutrition" : `/nutrition?date=${d}`, { scroll: false });
   };
 
   if (!settingsQ.data || !active) return null;

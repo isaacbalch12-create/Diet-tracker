@@ -1,25 +1,58 @@
-# Diet Tracker
+# Momentum — nutrition, training, running, health & routines
 
-A personal nutrition, macro and weight tracker with AI-assisted food logging.
-Describe a meal in plain English or snap a photo; Claude identifies the foods
-and portions, the USDA FoodData Central database supplies the nutrient values,
-and the app computes every total deterministically. Weight, intake and goal
-history turn into trends, analytics and an assistant that answers questions
-from your own data.
+One app for the whole picture: what you eat, what you weigh, how you train,
+your daily run, steps and sleep from your phone, your morning and nightly
+routines, and the goals that tie them together. It merges two earlier apps —
+the **Diet Tracker** (this repository) and **LiftLog** (the workout tracker) —
+into one product with shared goals, dashboard, statistics and navigation.
 
 - **Stack:** Next.js 16 (App Router, TypeScript) · Tailwind CSS 4 · Recharts ·
   PostgreSQL via Drizzle ORM (embedded PGlite or any hosted Postgres) ·
   Anthropic Claude API · USDA FoodData Central.
 - **Single-user:** password login, all data in your own database.
 
-| Dashboard | Reviewing a meal before saving | Mobile (dark) |
-|---|---|---|
-| ![Dashboard](docs/images/dashboard.png) | ![Meal review](docs/images/log-review.png) | ![Mobile dashboard](docs/images/mobile-dark.png) |
+| Area | What it does |
+| --- | --- |
+| **Today** | Customizable dashboard: weight, calories & macros, water, workout, run, steps, sleep, morning/nightly routine progress, goal progress, insights and a chronological activity log. Reorder or hide sections and choose the overview metrics. |
+| **Goals** | Any number of goals per area — nutrition (any nutrient, water), body (target weight, weekly rate, weigh-in consistency), exercise (workouts/week, estimated 1RM, weight × reps, sets/reps/volume, PRs), running (run every day, distance, run days, consistency), health (steps, sleep, sleep score when provided, resting HR, HRV), routines (completion, reading, journaling, mobility) and custom habits. Daily, weekly, monthly or custom periods; start/end dates; pause/resume; streaks; full history. Progress is computed live from your records, so every log updates every goal. Target changes apply from today — history keeps the targets it had. |
+| **Nutrition** | Everything from the Diet Tracker: describe a meal or snap a photo; Claude identifies foods and portions, USDA data supplies nutrients, totals are computed deterministically; AI estimates are labeled and editable; daily dashboard with remaining calories/macros; history; analytics. |
+| **Weight** | Morning and night weigh-ins, daily average, 7-day rolling average, trend, fluctuation, weekly/monthly averages. |
+| **Training** | Everything from LiftLog except time tracking: fast set logging (weight, reps, optional RPE, warm-ups, notes) with last session's numbers beside every set, templates, repeat a workout, log past workouts, 100+ built-in exercises plus custom ones, per-exercise history and charts, estimated 1RM trends and plateau checks, rep records, personal records, weekly/monthly volume and muscle-group breakdowns. **No timers, durations or rest timers.** |
+| **Running** | Daily running focused on consistency and distance (no pace or duration): log completion, distance, type, effort and notes; planned rest and recovery days never break a streak; streaks, consistency %, weekly/monthly distance, progression charts, records, recovery cautions. |
+| **Steps & sleep** | Apple Health / Health Connect data via a token-protected sync endpoint (iOS Shortcut, Health Auto Export, or an Android exporter) plus manual entry: steps, sleep duration and stages, sleep score only when a connected source supplies one, resting HR, HRV, active energy — with source and last-sync time on every value. See [docs/health-integration.md](docs/health-integration.md). |
+| **Routines & journal** | Separate morning and nightly routines (defaults: stretching & mobility, reading, journaling), fully editable: add/remove/reorder activities, required vs optional, numeric targets, mobility routine library, journal prompts, routine templates. Daily checklist, completion %, streaks, per-activity consistency. Journal with prompts, free writing and browsing by date. |
+| **Analytics** | Tabs for Overview (labeled insights + daily/weekly/monthly summaries), Nutrition & body, Strength, Running, Steps & sleep and Routines, with 7D/30D/90D/6M/1Y/All filters. |
+| **AI assistant** | Answers questions across all areas using read-only tools over your data; proposes changes you confirm. |
 
-More: [weight trends](docs/images/weight.png) · [analytics](docs/images/analytics.png).
-Screenshots use the generated demo data (`npm run demo`), not real records.
+### Principles
 
----
+- **Nothing is invented.** Missing days are gaps, not zeros. Thin data is
+  reported as "not enough data". A sleep score is shown only with the name of
+  the device that produced it.
+- **Measured vs estimated vs observed.** Insights and statistics carry a label:
+  *Measured* (counts of what you logged/synced), *Estimate* (model-based, e.g.
+  estimated 1RM, maintenance calories) or *Pattern* (an association, not a cause).
+- **Recovery counts.** Rest/recovery days are first-class; the app warns about
+  long stretches without rest, very low intake or very fast weight loss, and
+  never encourages pushing through pain.
+
+## Moving your data into the unified app
+
+- **Diet Tracker data** is preserved automatically: the unified schema only
+  *adds* tables and columns (migration `0001_unified_tracker`). Existing meals,
+  weigh-ins, goals (with their version history), photos, saved meals and
+  assistant history are untouched.
+- **LiftLog data** lives in your phone's browser (IndexedDB), so it can't be
+  read by a server directly. In LiftLog open **Settings → Backup (JSON)**, then
+  in this app open **Settings → Import workouts from LiftLog** and choose the
+  file. The import merges by LiftLog's own ids: importing the same file twice
+  changes nothing, and a newer backup updates only workouts edited since
+  (newest copy wins; workouts edited here are never overwritten by an older
+  copy). Exercises (including custom ones and favorites), templates, warm-up
+  flags, RPE, notes and record celebrations come across; workout durations,
+  rest timers and set completion times are intentionally not imported as
+  features (the original timestamps are kept as provenance metadata only).
+  Your LiftLog weekly target becomes a "Work out N× per week" goal.
 
 ## Quick start (local)
 
@@ -38,8 +71,9 @@ features. Add `ANTHROPIC_API_KEY` to `.env.local` to enable photo/text
 analysis and the assistant.
 
 Want to look around first? `npm run demo` creates a separate, clearly labelled
-demo database (`./data/pglite-demo`, ~90 days of sample meals and weigh-ins)
-and starts the app on it. It never touches your real data.
+demo database (`./data/pglite-demo`, ~90 days of sample meals, weigh-ins,
+workouts, runs, synced steps & sleep, routines and goals) and starts the app on
+it. It never touches your real data.
 
 ## Environment variables
 
@@ -72,10 +106,15 @@ All secrets are read only on the server; nothing is exposed to the browser.
   copies it into `netlify/database/migrations/` (a unit test checks both
   folders match). Never edit a migration that has already been deployed.
 
-Tables: `settings`, `goals` (versioned by effective date), `weight_entries`,
+Tables: `settings`, `goals` (versioned daily nutrition targets), `weight_entries`,
 `meals`, `meal_items`, `meal_images`, `meal_analyses` (AI drafts),
 `saved_meals`, `foods` (USDA + custom), `chat_conversations`,
-`chat_messages`, `assistant_actions`.
+`chat_messages`, `assistant_actions`; training: `exercises`, `workouts`,
+`workout_exercises`, `workout_sets`, `workout_templates`; running:
+`run_entries`; `water_logs`; phone health: `health_connections`,
+`health_daily`, `health_sync_events`; routines: `routine_activities`,
+`mobility_routines`, `routine_logs`, `routine_templates`, `journal_entries`;
+goals: `user_goals`, `goal_checkins`.
 
 ## Nutrition data (USDA FoodData Central)
 
@@ -120,7 +159,7 @@ How the AI is used — and what it is *not* trusted with:
   existing result instead of creating duplicates.
 - **Assistant:** answers questions by calling read-only tools over your data
   (daily summaries, statistics, rankings, period comparisons, weight vs.
-  intake). It can only *propose* changes (log a weight, update goals, delete an
+  intake, training, running, steps & sleep, routines, goals and insights). It can only *propose* changes (log a weight, update goals, delete an
   entry); they run after you press **Confirm**.
 
 The app uses adaptive thinking with `effort: medium`, prompt caching, and the
@@ -137,6 +176,9 @@ calls (search → final answer); photo analysis costs more input tokens.
   in-browser resizing), served only to the signed-in user with
   `Content-Security-Policy: default-src 'none'`.
 - CSV exports neutralize spreadsheet formula injection.
+- The health sync endpoint (`/api/ingest/health`) authenticates with a
+  per-connection bearer token (stored as a SHA-256 hash), accepts only the
+  data types the connection allows, and can be revoked instantly.
 
 ## Deployment
 

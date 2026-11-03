@@ -5,7 +5,8 @@ import { getDb, type Db } from "./db";
 import type { Settings } from "./db/schema";
 import { AppError } from "./errors";
 import { getSettings, settingsToday } from "./services/settings";
-import type { LocalDate } from "./time";
+import { addDays, diffDays, presetRange, RANGE_PRESETS, type LocalDate, type RangePreset } from "./time";
+import { rangeQuerySchema } from "./validation";
 
 export interface Ctx {
   db: Db;
@@ -64,4 +65,23 @@ export async function readJson<T extends z.ZodType>(req: Request, schema: T): Pr
 
 export function query(req: Request): URLSearchParams {
   return new URL(req.url).searchParams;
+}
+
+/**
+ * Date range from `?range=7d|30d|90d|6m|1y|all` or `?start=&end=`, ending today by default.
+ * "all" starts at `earliest` (the first record) when given.
+ */
+export function rangeFromQuery(req: Request, today: LocalDate, earliest?: LocalDate | null, fallback: RangePreset = "30d"): { start: LocalDate; end: LocalDate } {
+  const q = query(req);
+  const preset = q.get("range");
+  if (preset && (RANGE_PRESETS as readonly string[]).includes(preset)) return presetRange(preset as RangePreset, today, earliest);
+  const start = q.get("start");
+  const end = q.get("end");
+  if (start || end) {
+    const r = rangeQuerySchema.parse({ start: start ?? addDays(end ?? today, -29), end: end ?? today });
+    if (r.start > r.end) throw new AppError(400, "bad_range", "Start date must be before end date");
+    if (diffDays(r.start, r.end) > 3660) throw new AppError(400, "bad_range", "Range is limited to 10 years");
+    return r;
+  }
+  return presetRange(fallback, today, earliest);
 }

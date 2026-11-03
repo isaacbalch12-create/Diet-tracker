@@ -178,7 +178,7 @@ describe("analytics, export and backup", () => {
     const backup = JSON.parse(JSON.stringify(await fullBackup(db, { includeImages: true })));
     const fresh = await createMemoryDb();
     const res = await restoreBackup(fresh, backup);
-    expect(res).toEqual({ meals: 1, weights: 1 });
+    expect(res).toEqual({ meals: 1, weights: 1, workouts: 0, runs: 0 });
     const day = await daySummary(fresh, "2026-10-26");
     expect(day.totals.values.calories).toBeCloseTo(342.5, 6);
     expect((await getSettings(fresh)).timezone).toBe("America/Chicago");

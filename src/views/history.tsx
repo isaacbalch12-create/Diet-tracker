@@ -58,7 +58,7 @@ export function HistoryView() {
               const pct = goalCal && d.calories ? Math.min(1, d.calories / goalCal) : 0;
               return (
                 <li key={d.date}>
-                  <Link href={`/?date=${d.date}`} className="grid grid-cols-1 gap-1 px-4 py-3 hover:bg-surface-2 sm:grid-cols-[8rem_1fr_12rem] sm:items-center sm:gap-4 sm:px-5">
+                  <Link href={`/nutrition?date=${d.date}`} className="grid grid-cols-1 gap-1 px-4 py-3 hover:bg-surface-2 sm:grid-cols-[8rem_1fr_12rem] sm:items-center sm:gap-4 sm:px-5">
                     <span className="flex items-baseline justify-between gap-2">
                       <span className="text-sm font-medium text-fg">{formatLocalDate(d.date, { weekday: "short", month: "short", day: "numeric" })}</span>
                       {d.mealCount > 0 && (

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isLocalDate, isValidTimeZone } from "./time";
 import { NUTRIENT_KEYS } from "./nutrition/nutrients";
+import { DASHBOARD_SECTIONS, OVERVIEW_TILES } from "./db/schema";
 
 export const localDateSchema = z.string().refine(isLocalDate, "Expected a date like 2026-10-26");
 export const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Expected a time like 07:30");
@@ -114,6 +115,20 @@ export const settingsInputSchema = z.object({
   mealCategories: z.array(z.string().trim().min(1).max(40)).min(1).max(12).optional(),
   reminders: z.object({ enabled: z.boolean(), morning: timeSchema, night: timeSchema }).optional(),
   onboarded: z.boolean().optional(),
+  distanceUnit: z.enum(["mi", "km"]).optional(),
+  waterUnit: z.enum(["oz", "ml"]).optional(),
+  oneRmFormula: z.enum(["epley", "brzycki"]).optional(),
+  maxRepsFor1rm: z.number().int().min(1).max(30).optional(),
+  showRpe: z.boolean().optional(),
+  runTypes: z.array(z.string().trim().min(1).max(40)).min(1).max(20).optional(),
+  dashboard: z
+    .object({
+      order: z.array(z.enum(DASHBOARD_SECTIONS)).max(20),
+      hidden: z.array(z.enum(DASHBOARD_SECTIONS)).max(20),
+      tiles: z.array(z.enum(OVERVIEW_TILES)).max(20),
+      hiddenGoalIds: z.array(z.string().max(100)).max(200),
+    })
+    .optional(),
 });
 
 export const rangeQuerySchema = z.object({
