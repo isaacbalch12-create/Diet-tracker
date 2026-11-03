@@ -51,7 +51,14 @@ export const exerciseInputSchema = z.object({
   instructions: z.string().max(4000).default(""),
 });
 
-export const exercisePatchSchema = exerciseInputSchema.partial().extend({
+/** Partial update: no defaults, so omitted fields are left unchanged (zod's .partial() would keep defaults). */
+export const exercisePatchSchema = z.object({
+  name: z.string().trim().min(1, "Name is required").max(100).optional(),
+  primaryMuscle: z.enum(MUSCLE_GROUPS as [string, ...string[]]).optional(),
+  secondaryMuscles: z.array(z.enum(MUSCLE_GROUPS as [string, ...string[]])).max(13).optional(),
+  equipment: z.enum(EQUIPMENT as [string, ...string[]]).optional(),
+  category: z.enum(CATEGORIES as [string, ...string[]]).optional(),
+  instructions: z.string().max(4000).optional(),
   isFavorite: z.boolean().optional(),
   archived: z.boolean().optional(),
 });

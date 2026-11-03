@@ -53,7 +53,7 @@ export function ProgressRing({ value, size = 56, stroke = 6, color = "var(--acce
   );
 }
 
-export type PeriodStatusName = "met" | "missed" | "in_progress" | "excused" | "paused" | "no_data" | "upcoming";
+export type PeriodStatusName = "met" | "missed" | "in_progress" | "excused" | "paused" | "no_data" | "upcoming" | "not_reached";
 
 const STATUS_STYLE: Record<PeriodStatusName, { label: string; cls: string }> = {
   met: { label: "Met", cls: "bg-good text-white" },
@@ -63,6 +63,7 @@ const STATUS_STYLE: Record<PeriodStatusName, { label: string; cls: string }> = {
   paused: { label: "Paused", cls: "bg-surface-3 text-muted" },
   no_data: { label: "No data", cls: "border border-dashed border-line-strong text-muted" },
   upcoming: { label: "Upcoming", cls: "border border-line text-muted" },
+  not_reached: { label: "Not reached yet", cls: "bg-surface-3 text-fg-2" },
 };
 
 export function statusLabel(s: PeriodStatusName): string {

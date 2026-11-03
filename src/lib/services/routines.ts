@@ -8,7 +8,7 @@
  * (pages, reps, rounds) or a journal entry.
  */
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gte, ilike, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNull, lte, min, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db, DbOrTx } from "../db";
 import {
@@ -46,7 +46,21 @@ export const activityInputSchema = z.object({
     })
     .default({}),
 });
-export const activityPatchSchema = activityInputSchema.partial();
+/** Partial update: no defaults, so omitted fields are left unchanged. */
+export const activityPatchSchema = z.object({
+  title: z.string().trim().min(1).max(80).optional(),
+  kind: z.enum(["mobility", "reading", "journal", "checklist", "count"]).optional(),
+  required: z.boolean().optional(),
+  targetValue: z.number().positive().max(100_000).nullable().optional(),
+  targetUnit: z.string().trim().max(30).nullable().optional(),
+  instructions: z.string().max(2000).nullable().optional(),
+  config: z
+    .object({
+      mobilityRoutineId: z.uuid().nullable().optional(),
+      prompts: z.array(promptSchema).max(20).optional(),
+    })
+    .optional(),
+});
 
 export const logInputSchema = z.object({
   localDate: localDateSchema,
@@ -198,10 +212,13 @@ export async function logActivity(db: DbOrTx, input: z.infer<typeof logInputSche
   const [a] = await db.select().from(routineActivities).where(eq(routineActivities.id, input.activityId));
   if (!a) throw notFound("Activity");
   const now = new Date();
+  // Omitted value/details keep what was logged before (a bare tick never erases pages read).
+  const [prev] = await db.select().from(routineLogs).where(and(eq(routineLogs.localDate, input.localDate), eq(routineLogs.activityId, a.id)));
+  const value = input.value !== undefined ? input.value : (prev?.value ?? null);
+  const details = input.details !== undefined ? { ...(prev?.details ?? {}), ...input.details } : (prev?.details ?? {});
   // Reaching a numeric target (e.g. pages) counts as complete.
-  const value = input.value ?? null;
   const completed = input.completed || (value != null && a.targetValue != null && value >= a.targetValue);
-  const values = { completed, value, details: input.details ?? {}, completedAt: completed ? now : null };
+  const values = { completed, value, details, completedAt: completed ? (prev?.completed ? (prev.completedAt ?? now) : now) : null };
   const [row] = await db
     .insert(routineLogs)
     .values({ localDate: input.localDate, activityId: a.id, slot: a.slot, ...values })
@@ -310,9 +327,17 @@ export async function saveJournal(db: DbOrTx, input: z.infer<typeof journalInput
   return row;
 }
 
+/** Delete an entry; the routine's journaling activity for that day is unticked with it. */
 export async function deleteJournal(db: DbOrTx, id: string): Promise<void> {
-  const rows = await db.delete(journalEntries).where(eq(journalEntries.id, id)).returning({ id: journalEntries.id });
-  if (!rows.length) throw notFound("Journal entry");
+  const [row] = await db.delete(journalEntries).where(eq(journalEntries.id, id)).returning();
+  if (!row) throw notFound("Journal entry");
+  const acts = (await listActivities(db, row.slot, { includeArchived: true })).filter((a) => a.kind === "journal");
+  if (acts.length) {
+    await db
+      .update(routineLogs)
+      .set({ completed: false, completedAt: null })
+      .where(and(eq(routineLogs.localDate, row.localDate), inArray(routineLogs.activityId, acts.map((a) => a.id))));
+  }
 }
 
 export async function listJournal(db: DbOrTx, opts: { start?: LocalDate; end?: LocalDate; slot?: RoutineSlot; q?: string; limit?: number }): Promise<JournalEntry[]> {
@@ -320,7 +345,10 @@ export async function listJournal(db: DbOrTx, opts: { start?: LocalDate; end?: L
   if (opts.start) conds.push(gte(journalEntries.localDate, opts.start));
   if (opts.end) conds.push(lte(journalEntries.localDate, opts.end));
   if (opts.slot) conds.push(eq(journalEntries.slot, opts.slot));
-  if (opts.q?.trim()) conds.push(or(ilike(journalEntries.body, `%${opts.q.trim().replace(/[%_]/g, "")}%`))!);
+  if (opts.q?.trim()) {
+    const like = `%${opts.q.trim().replace(/[%_\\]/g, "")}%`;
+    conds.push(or(ilike(journalEntries.body, like), ilike(sql`${journalEntries.answers}::text`, like))!);
+  }
   return db
     .select()
     .from(journalEntries)
@@ -426,6 +454,12 @@ export async function routineStats(db: DbOrTx, range: { start: LocalDate; end: L
     reading: { total: days.reduce((a, d) => a + d.readingValue, 0), days: days.filter((d) => d.readingValue > 0).length },
     journaling: { days: days.filter((d) => d.journaled.morning || d.journaled.night).length, morning: days.filter((d) => d.journaled.morning).length, night: days.filter((d) => d.journaled.night).length },
   };
+}
+
+/** First day any routine activity existed (for "All time" ranges). */
+export async function earliestRoutineDate(db: DbOrTx): Promise<LocalDate | null> {
+  const [row] = await db.select({ d: min(routineActivities.activeFrom) }).from(routineActivities);
+  return row?.d ?? null;
 }
 
 export async function activitiesByIds(db: DbOrTx, ids: string[]) {

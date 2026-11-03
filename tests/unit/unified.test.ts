@@ -452,3 +452,52 @@ describe("assistant tools across areas", () => {
     expect(insights.summaries).toBeTruthy();
   });
 });
+
+describe("partial updates", () => {
+  it("PATCH schemas never inject defaults, and a bare routine tick keeps logged amounts", async () => {
+    const { exercisePatchSchema, updateExercise, listExercises } = await import("@/lib/services/training");
+    const { activityPatchSchema, updateActivity } = await import("@/lib/services/routines");
+    const { goalPatchSchema } = await import("@/lib/services/goals");
+    expect(exercisePatchSchema.parse({ isFavorite: true })).toEqual({ isFavorite: true });
+    expect(activityPatchSchema.parse({ title: "Read" })).toEqual({ title: "Read" });
+    expect(goalPatchSchema.parse({ status: "paused" })).toEqual({ status: "paused" });
+
+    await listExercises(db);
+    const fav = await updateExercise(db, "bi-barbell-bench-press", exercisePatchSchema.parse({ isFavorite: true }));
+    expect(fav.secondaryMuscles.length).toBeGreaterThan(0);
+    expect(fav.instructions).not.toBe("");
+
+    await ensureDefaults(db, s, TODAY);
+    const day = await getRoutineDay(db, "morning", TODAY);
+    const reading = day.activities.find((a) => a.kind === "reading")!;
+    const edited = await updateActivity(db, reading.id, activityPatchSchema.parse({ title: "Read a book" }));
+    expect(edited.targetValue).toBe(10);
+    await logActivity(db, { localDate: TODAY, activityId: reading.id, completed: false, value: 6, details: { title: "Dune" } }, TODAY);
+    const ticked = await logActivity(db, { localDate: TODAY, activityId: reading.id, completed: true }, TODAY);
+    expect(ticked).toMatchObject({ completed: true, value: 6, details: { title: "Dune" } });
+
+    const g = await createGoal(db, goalInputSchema.parse({ title: "Steps", metric: "steps", comparator: "at_least", targetValue: 8000, period: "daily", notes: "keep", showOnDashboard: false }), TODAY);
+    const paused = await updateGoal(db, g.id, goalPatchSchema.parse({ status: "paused" }), TODAY);
+    expect(paused).toMatchObject({ notes: "keep", showOnDashboard: false, targetHistory: g.targetHistory, status: "paused" });
+  });
+});
+
+describe("linked goals and reach-goal progress", () => {
+  it("keeps nutrition history across target changes and measures progress from the starting level", async () => {
+    await createMeal(db, createMealSchema.parse({ eatenAt: "2026-10-20T13:00:00Z", category: "Lunch", title: "Rice", source: "manual", items: [{ name: "Rice", quantity: 1, unit: "g", gramsPerUnit: 300, nutrientsPer100g: { calories: 130, protein: 2.7 }, nutrientSource: "database", quantitySource: "manual" }] }), s);
+    await setGoals(db, { calories: 2200, protein: 150 }, "2026-10-01");
+    await setGoals(db, { calories: 2000, protein: 160 }, TODAY);
+    const linked = (await goalsWithProgress(db, s, TODAY)).find((g) => g.id === "nutrition:protein")!;
+    expect(linked.startDate).toBe("2026-10-20");
+    expect(linked.targetHistory.map((v) => v.value)).toEqual([150, 160]);
+
+    // Target weight: progress is measured from the first 7-day average toward the target.
+    const s2 = await updateSettings(db, { startingWeight: { value: 200, unit: "lb", date: "2026-10-25" }, targetWeight: { value: 190, unit: "lb" } });
+    for (const [d, lb] of [["2026-10-25", 200], ["2026-10-26", 200], ["2026-10-27", 200], ["2026-11-01", 195], ["2026-11-02", 195]] as const) {
+      await createWeight(db, { value: lb, unit: "lb", period: "morning", localDate: d, measuredAt: new Date(`${d}T12:00:00Z`) }, s2);
+    }
+    const tw = (await goalsWithProgress(db, s2, TODAY)).find((g) => g.id === "body:target_weight")!;
+    expect(tw.progress).toBeGreaterThan(0.2);
+    expect(tw.progress).toBeLessThan(0.6);
+  });
+});

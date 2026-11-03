@@ -80,9 +80,23 @@ function checkGoal(g: z.infer<typeof goalBase>, ctx: z.RefinementCtx) {
 }
 
 export const goalInputSchema = goalBase.superRefine(checkGoal);
-export const goalPatchSchema = goalBase
-  .partial()
-  .extend({ status: z.enum(["active", "paused", "completed", "archived"]).optional(), position: z.number().int().min(0).max(10_000).optional() });
+/** Partial update: no defaults, so omitted fields are left unchanged (zod's .partial() would keep defaults). */
+export const goalPatchSchema = z.object({
+  title: z.string().trim().min(1).max(120).optional(),
+  metric: z.string().refine((m) => !!METRIC_BY_KEY[m], "Unknown metric").optional(),
+  params: paramsSchema.optional(),
+  comparator: z.enum(["at_least", "at_most", "range"]).optional(),
+  targetValue: z.number().finite().min(-1000).max(10_000_000).optional(),
+  targetMax: z.number().finite().min(-1000).max(10_000_000).nullable().optional(),
+  period: z.enum(["daily", "weekly", "monthly", "custom"]).optional(),
+  periodDays: z.number().int().min(2).max(365).nullable().optional(),
+  startDate: localDateSchema.optional(),
+  endDate: localDateSchema.nullable().optional(),
+  showOnDashboard: z.boolean().optional(),
+  notes: z.string().max(1000).nullable().optional(),
+  status: z.enum(["active", "paused", "completed", "archived"]).optional(),
+  position: z.number().int().min(0).max(10_000).optional(),
+});
 
 export const checkinSchema = z.object({ localDate: localDateSchema, value: z.number().min(0).max(1_000_000).nullable(), note: z.string().max(500).nullable().default(null) });
 
@@ -121,6 +135,7 @@ export interface GoalView {
   met: number;
   recent: GoalEvaluation["periods"];
   targetHistory: GoalTargetVersion[];
+  pauses: { from: LocalDate; to: LocalDate | null }[];
 }
 
 function specOf(g: Pick<UserGoal, "metric" | "comparator" | "targetValue" | "targetMax" | "period" | "periodDays" | "startDate" | "endDate" | "pauses" | "targetHistory" | "params">): GoalSpec {
@@ -451,7 +466,9 @@ async function linkedGoals(db: DbOrTx, s: Settings, today: LocalDate): Promise<(
       const toVersion = (t: number) => (comparator === "range" ? { value: t * (1 - TARGET_TOLERANCE), max: t * (1 + TARGET_TOLERANCE) } : { value: t, max: null });
       const history = versions.filter((v) => valueOf(v) != null).map((v) => ({ from: v.effectiveFrom, ...toVersion(valueOf(v)!) }));
       const target = valueOf(current)!;
-      const startDate = [firstMeal ?? today, current.effectiveFrom === "2000-01-01" ? today : versions.find((v) => valueOf(v) != null)!.effectiveFrom].sort()[0];
+      // History starts when the target first existed — or, for targets set from the beginning, at the first logged meal.
+      const firstVersion = versions.find((v) => valueOf(v) != null)!;
+      const startDate = firstVersion.effectiveFrom === "2000-01-01" ? (firstMeal ?? today) : firstMeal && firstMeal > firstVersion.effectiveFrom ? firstMeal : firstVersion.effectiveFrom;
       const tv = toVersion(target);
       out.push({
         id: `nutrition:${key}`,
@@ -467,7 +484,7 @@ async function linkedGoals(db: DbOrTx, s: Settings, today: LocalDate): Promise<(
         unit: def.unit,
         period: "daily",
         periodDays: null,
-        startDate: startDate < "2000-01-02" ? today : startDate,
+        startDate: startDate > today ? today : startDate,
         endDate: null,
         status: "active",
         pauses: [],
@@ -573,15 +590,31 @@ export async function goalsWithProgress(db: DbOrTx, s: Settings, today: LocalDat
       notes: g.notes,
       subject,
       current: cur,
-      progress: cur ? progressRatio(cur.value, g.comparator, cur.target, cur.targetMax) : null,
+      progress: cur ? levelProgress(ev, g.comparator, spec.aggregation) ?? progressRatio(cur.value, g.comparator, cur.target, cur.targetMax) : null,
       streak: ev?.streak ?? { current: 0, best: 0, unit: "days" },
       successRate: ev?.successRate ?? null,
       judged: ev?.judged ?? 0,
       met: ev?.met ?? 0,
       recent: ev ? (opts.full ? ev.periods : ev.periods.slice(-(opts.recent ?? 14))) : [],
       targetHistory: spec.targetHistory,
+      pauses: g.pauses,
     };
   });
+}
+
+/**
+ * Progress for "reach a level" goals (target weight, a lift milestone): how far
+ * you've come from where the goal started toward the target, 0–1.
+ */
+function levelProgress(ev: GoalEvaluation | null, comparator: GoalComparator, aggregation: Aggregation): number | null {
+  const cur = ev?.current;
+  if (aggregation !== "level" || !ev || !cur || cur.value == null || comparator === "range") return null;
+  if (cur.meetsNow) return 1;
+  const baseline = ev.periods.find((p) => p.value != null)!.value!;
+  const span = comparator === "at_most" ? baseline - cur.target : cur.target - baseline;
+  if (span <= 0) return 0;
+  const done = comparator === "at_most" ? baseline - cur.value : cur.value - baseline;
+  return Math.max(0, Math.min(1, done / span));
 }
 
 async function validateRefs(db: DbOrTx, metric: string, params: Record<string, unknown>) {
@@ -679,6 +712,7 @@ export async function saveCheckin(db: DbOrTx, goalId: string, input: z.infer<typ
   if (!g) throw notFound("Goal");
   if (g.metric !== "custom") throw badRequest("Only custom goals take manual check-ins; other goals update from your logs automatically.");
   if (input.localDate > today) throw badRequest("Check-ins can't be for future days.");
+  if (input.localDate < g.startDate) throw badRequest(`This goal starts on ${g.startDate}; check-ins before that don't count.`);
   if (input.value == null) {
     await db.delete(goalCheckins).where(and(eq(goalCheckins.goalId, goalId), eq(goalCheckins.localDate, input.localDate)));
     return;

@@ -240,7 +240,7 @@ export async function computeInsights(db: DbOrTx, s: Settings, today: LocalDate,
         id: "run-consistency",
         domain: "running",
         kind: "measured",
-        tone: delta != null && delta < -0.1 ? "attention" : (c1.pct ?? 0) >= 0.8 ? "positive" : "neutral",
+        tone: delta != null && delta <= -0.05 ? "attention" : (c1.pct ?? 0) >= 0.8 ? "positive" : "neutral",
         title: delta == null ? "Running consistency" : delta >= 0.05 ? "Running consistency is improving" : delta <= -0.05 ? "Running consistency dipped" : "Running consistency is steady",
         detail: `You ran on ${c1.done} of ${c1.eligible} days (${pct(c1.pct)}) in the last ${days} days${c0?.pct != null ? `, vs ${pct(c0.pct)} the ${days} days before` : ""}. ${c1.rest + c1.recovery} planned rest/recovery day${c1.rest + c1.recovery === 1 ? "" : "s"} were excluded.`,
       });

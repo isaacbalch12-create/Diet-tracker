@@ -6,7 +6,7 @@
  * app, or an Android/other exporter). See docs/health-integration.md.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { and, asc, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, min } from "drizzle-orm";
 import { z } from "zod";
 import type { DbOrTx } from "../db";
 import { healthConnections, healthDaily, healthSyncEvents, type HealthConnection, type HealthDaily, type HealthMetric, type HealthPlatform, type Settings } from "../db/schema";
@@ -181,6 +181,11 @@ export async function deleteHealthValue(db: DbOrTx, id: string): Promise<void> {
   if (!rows.length) throw notFound("Health value");
 }
 
+export async function earliestHealthDate(db: DbOrTx): Promise<LocalDate | null> {
+  const [row] = await db.select({ d: min(healthDaily.localDate) }).from(healthDaily);
+  return row?.d ?? null;
+}
+
 export async function listHealth(db: DbOrTx, range: { start: LocalDate; end: LocalDate }, metrics?: HealthMetric[]): Promise<HealthDaily[]> {
   const conds = [gte(healthDaily.localDate, range.start), lte(healthDaily.localDate, range.end)];
   if (metrics?.length) conds.push(inArray(healthDaily.metric, metrics));
@@ -192,8 +197,10 @@ export async function listHealth(db: DbOrTx, range: { start: LocalDate; end: Loc
  * most recently synced value is shown (it's the most complete for phone totals)
  * and the alternatives are listed, never summed.
  */
-export function pickDaily(rows: HealthDaily[]): Map<string, HealthDaily & { alternatives: { source: string; sourceLabel: string; value: number }[] }> {
-  const map = new Map<string, HealthDaily & { alternatives: { source: string; sourceLabel: string; value: number }[] }>();
+type Alternative = { id: string; source: string; sourceLabel: string; value: number };
+
+export function pickDaily(rows: HealthDaily[]): Map<string, HealthDaily & { alternatives: Alternative[] }> {
+  const map = new Map<string, HealthDaily & { alternatives: Alternative[] }>();
   for (const r of rows) {
     const key = `${r.localDate}|${r.metric}`;
     const cur = map.get(key);
@@ -202,9 +209,9 @@ export function pickDaily(rows: HealthDaily[]): Map<string, HealthDaily & { alte
       continue;
     }
     if (r.syncedAt.getTime() > cur.syncedAt.getTime()) {
-      map.set(key, { ...r, alternatives: [...cur.alternatives, { source: cur.source, sourceLabel: cur.sourceLabel, value: cur.value }] });
+      map.set(key, { ...r, alternatives: [...cur.alternatives, { id: cur.id, source: cur.source, sourceLabel: cur.sourceLabel, value: cur.value }] });
     } else {
-      cur.alternatives.push({ source: r.source, sourceLabel: r.sourceLabel, value: r.value });
+      cur.alternatives.push({ id: r.id, source: r.source, sourceLabel: r.sourceLabel, value: r.value });
     }
   }
   return map;
@@ -231,7 +238,7 @@ function slopePerWeek(points: { x: number; y: number }[]): number | null {
   return sxx === 0 ? null : (sxy / sxx) * 7;
 }
 
-export async function healthOverview(db: DbOrTx, range: { start: LocalDate; end: LocalDate }, s: Settings) {
+export async function healthOverview(db: DbOrTx, range: { start: LocalDate; end: LocalDate }, s: Settings, today?: LocalDate) {
   const rows = await listHealth(db, range);
   const picked = [...pickDaily(rows).values()];
   const dates = eachDate(range.start, range.end);
@@ -239,18 +246,21 @@ export async function healthOverview(db: DbOrTx, range: { start: LocalDate; end:
     HEALTH_METRIC_KEYS.map((metric) => {
       const def = HEALTH_METRIC_BY_KEY[metric];
       const byDate = new Map(picked.filter((r) => r.metric === metric).map((r) => [r.localDate, r]));
-      const values = [...byDate.values()].map((r) => r.value);
+      // Today's running totals (steps, active energy) are partial, so they're left out of averages and trends.
+      const partialToday = def.aggregate === "sum" && today ? today : null;
+      const values = [...byDate.values()].filter((r) => r.localDate !== partialToday).map((r) => r.value);
       const avg = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
       const weekly = new Map<string, number[]>();
       const monthly = new Map<string, number[]>();
       for (const r of byDate.values()) {
+        if (r.localDate === partialToday) continue;
         const wk = startOfWeek(r.localDate, s.weekStartsOn);
         weekly.set(wk, [...(weekly.get(wk) ?? []), r.value]);
         const mk = monthKey(r.localDate);
         monthly.set(mk, [...(monthly.get(mk) ?? []), r.value]);
       }
       const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
-      const pts = dates.map((d, i) => ({ x: i, y: byDate.get(d)?.value })).filter((p): p is { x: number; y: number } => p.y != null);
+      const pts = dates.map((d, i) => ({ x: i, y: d === partialToday ? undefined : byDate.get(d)?.value })).filter((p): p is { x: number; y: number } => p.y != null);
       return [
         metric,
         {
@@ -262,7 +272,8 @@ export async function healthOverview(db: DbOrTx, range: { start: LocalDate; end:
               ? { date: d, value: r.value, id: r.id, source: r.source, sourceLabel: r.sourceLabel, origin: r.origin, details: r.details, syncedAt: r.syncedAt, alternatives: r.alternatives }
               : { date: d, value: null };
           }),
-          loggedDays: values.length,
+          loggedDays: byDate.size,
+          averageExcludesToday: partialToday != null && byDate.has(partialToday),
           average: avg,
           min: values.length ? Math.min(...values) : null,
           max: values.length ? Math.max(...values) : null,

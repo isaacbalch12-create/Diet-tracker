@@ -140,7 +140,8 @@ export function toRunLike(e: RunEntry): RunLike {
 
 export async function runningOverview(db: DbOrTx, range: { start: LocalDate; end: LocalDate }, s: Settings, today: LocalDate) {
   const [entries, goal, earliest] = await Promise.all([listRuns(db, { end: range.end }), dailyRunGoal(db), earliestRunDate(db)]);
-  const trackingStart = [earliest, goal?.startDate].filter((x): x is string => !!x).sort()[0] ?? null;
+  // Before anything is logged (and without a run goal), no past day counts as missed.
+  const trackingStart = [earliest, goal?.startDate].filter((x): x is string => !!x).sort()[0] ?? today;
   const overview = runOverview(entries.map(toRunLike), range, today, { minDistanceM: goal?.minDistanceM ?? null, weekStartsOn: s.weekStartsOn, trackingStart });
   return {
     range,

@@ -37,7 +37,11 @@ export interface EvalContext {
   rate?: (end: LocalDate) => number | null;
 }
 
-export type PeriodStatus = "met" | "missed" | "in_progress" | "excused" | "paused" | "no_data" | "upcoming";
+/**
+ * "not_reached" is used for reach-a-level goals (target weight, a lift milestone):
+ * a day before the target is reached isn't a failure, it's progress not yet done.
+ */
+export type PeriodStatus = "met" | "missed" | "in_progress" | "excused" | "paused" | "no_data" | "upcoming" | "not_reached";
 
 export interface PeriodResult {
   start: LocalDate;
@@ -159,7 +163,7 @@ export function evaluatePeriod(spec: GoalSpec, p: { start: LocalDate; end: Local
     const final = meets && spec.comparator === "at_least" && (spec.aggregation === "sum" || spec.aggregation === "count");
     status = final || (meets && spec.period === "daily" && spec.comparator === "at_least") ? "met" : "in_progress";
   } else if (value == null) status = "no_data";
-  else status = meets ? "met" : "missed";
+  else status = meets ? "met" : spec.aggregation === "level" ? "not_reached" : "missed";
   let projected: number | null = null;
   if (isCurrent && value != null && (spec.aggregation === "sum" || spec.aggregation === "count") && spec.period !== "daily") {
     const elapsed = counted.length;
@@ -197,7 +201,8 @@ export function evaluateGoal(spec: GoalSpec, ctx: EvalContext, maxDays = 366): G
     else if (skip(p.status) || p.status === "in_progress") continue;
     else run = 0;
   }
-  const past = periods.filter((p) => p !== current && (p.status === "met" || p.status === "missed" || p.status === "no_data"));
+  // Reach goals have no success rate: every day before the milestone would otherwise count as a miss.
+  const past = spec.aggregation === "level" ? [] : periods.filter((p) => p !== current && (p.status === "met" || p.status === "missed" || p.status === "no_data"));
   const met = past.filter((p) => p.status === "met").length;
   const unit = spec.period === "daily" ? "days" : spec.period === "weekly" ? "weeks" : spec.period === "monthly" ? "months" : "periods";
   return { periods, current, streak: { current: cur, best, unit }, successRate: past.length ? met / past.length : null, judged: past.length, met };

@@ -486,7 +486,7 @@ export async function runAssistantTool(ctx: ToolContext, name: string, input: un
     }
     case "get_health_summary": {
       const r = rangeS.parse(raw);
-      const o = await healthOverview(ctx.db, { start: r.start_date, end: r.end_date }, ctx.settings);
+      const o = await healthOverview(ctx.db, { start: r.start_date, end: r.end_date }, ctx.settings, ctx.today);
       const out: Record<string, unknown> = { last_sync: o.sync.lastSyncAt, active_connections: o.sync.activeConnections };
       for (const [k, m] of Object.entries(o.metrics)) {
         if (!m.loggedDays) {
