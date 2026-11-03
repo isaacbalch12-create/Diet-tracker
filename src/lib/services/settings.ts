@@ -1,7 +1,7 @@
 import { asc, eq } from "drizzle-orm";
 import type { z } from "zod";
 import type { DbOrTx } from "../db";
-import { goals, settings, type Goal, type Settings } from "../db/schema";
+import { DASHBOARD_SECTIONS, goals, settings, type Goal, type Settings } from "../db/schema";
 import { badRequest } from "../errors";
 import type { GoalVersion } from "../nutrition/goals";
 import { goalForDate } from "../nutrition/goals";
@@ -46,6 +46,18 @@ export async function updateSettings(db: DbOrTx, input: z.infer<typeof settingsI
   }
   if (input.reminders) patch.reminders = input.reminders;
   if (input.onboarded !== undefined) patch.onboarded = input.onboarded;
+  if (input.distanceUnit) patch.distanceUnit = input.distanceUnit;
+  if (input.waterUnit) patch.waterUnit = input.waterUnit;
+  if (input.oneRmFormula) patch.oneRmFormula = input.oneRmFormula;
+  if (input.maxRepsFor1rm !== undefined) patch.maxRepsFor1rm = input.maxRepsFor1rm;
+  if (input.showRpe !== undefined) patch.showRpe = input.showRpe;
+  if (input.runTypes) patch.runTypes = [...new Map(input.runTypes.map((c) => [c.toLowerCase(), c])).values()];
+  if (input.dashboard) {
+    // Keep every section in the order list exactly once, appending any missing ones.
+    const order = [...new Set(input.dashboard.order)];
+    for (const sec of DASHBOARD_SECTIONS) if (!order.includes(sec)) order.push(sec);
+    patch.dashboard = { order, hidden: [...new Set(input.dashboard.hidden)], tiles: [...new Set(input.dashboard.tiles)], hiddenGoalIds: [...new Set(input.dashboard.hiddenGoalIds)] };
+  }
   if (Object.keys(patch).length === 0) return current;
   const [row] = await db.update(settings).set(patch).where(eq(settings.id, 1)).returning();
   return row;

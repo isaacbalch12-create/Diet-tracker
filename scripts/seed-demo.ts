@@ -1,6 +1,7 @@
 /**
  * Create an explicitly labelled DEMO database with ~90 days of realistic sample
- * data (weigh-ins, meals built from USDA foods, goals, favorites). It never
+ * data (weigh-ins, meals built from USDA foods, goals, favorites, workouts, runs,
+ * synced steps & sleep, routines and journal entries). It never
  * touches your real data: by default it writes to ./data/pglite-demo, refuses
  * to run against DATABASE_URL, and refuses to write into a database that
  * already has records. The app shows a "Demo mode" banner for this database.
@@ -84,7 +85,12 @@ async function main() {
 
   if ((await countFoods(db, "usda")) < 1000) {
     console.log("Importing USDA foods into the demo database…");
-    await importUsda(db, path.resolve("./data/usda"));
+    try {
+      await importUsda(db, path.resolve("./data/usda"));
+    } catch (err) {
+      // Offline: meals fall back to hand-entered estimates below.
+      console.warn(`USDA import unavailable (${(err as Error).message}); demo meals will use manual nutrition values.`);
+    }
   }
 
   const tz = process.env.DEMO_TIMEZONE ?? "America/Chicago";
@@ -107,6 +113,11 @@ async function main() {
   };
   const buildItems = async (tpl: Tpl, scale: number) => {
     const items = [];
+    if (!(await food(tpl.foods[0][0]))) {
+      // No food database available: one manual item with typical values for the meal.
+      const kcal = { Breakfast: 450, Lunch: 650, Dinner: 750, Snack: 220 }[Object.keys(MEALS).find((k) => MEALS[k].includes(tpl)) ?? "Snack"] ?? 400;
+      return [{ name: tpl.title, quantity: 1, unit: "serving", gramsPerUnit: 100, nutrientsPer100g: { calories: kcal * scale, protein: (kcal * scale * 0.3) / 4, carbs: (kcal * scale * 0.4) / 4, fat: (kcal * scale * 0.3) / 9 }, nutrientSource: "manual" as const, quantitySource: "manual" as const }];
+    }
     for (const [q, grams] of tpl.foods) {
       const f = await food(q);
       if (!f) continue;
@@ -166,7 +177,9 @@ async function main() {
   await saved.createSavedMeal(db, { name: favTpl.title, category: "Breakfast", items: createMealSchema.shape.items.parse(await buildItems(favTpl, 1)) });
   const favTpl2 = MEALS.Lunch[0];
   await saved.createSavedMeal(db, { name: favTpl2.title, category: "Lunch", items: createMealSchema.shape.items.parse(await buildItems(favTpl2, 1)) });
-  console.log(`Demo data created: ${mealsCreated} meals, ${weighIns} weigh-ins, 2 goal versions, 2 saved meals. Marked as DEMO.`);
+  const { seedUnified } = await import("./seed-unified");
+  const unified = await seedUnified(db, await settingsSvc.getSettings(db), start, today, rand);
+  console.log(`Demo data created: ${mealsCreated} meals, ${weighIns} weigh-ins, 2 goal versions, 2 saved meals, ${unified}. Marked as DEMO.`);
   void s;
   process.exit(0);
 }

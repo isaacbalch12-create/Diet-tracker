@@ -1,12 +1,21 @@
 "use client";
 
-import { AlertCircle, Info, TrendingUp } from "lucide-react";
+import { AlertCircle, Info, Lightbulb, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { CaloriesChart, CategoryChart, DataTable, MacroChart, WeeklyPairsCharts, WeightVsCaloriesCharts } from "@/components/charts";
 import { Card, CardTitle, EmptyState, ErrorBanner, Input, Segmented, Skeleton, Stat } from "@/components/ui";
-import { useAnalytics, useSettings } from "@/lib/client/hooks";
-import type { AnalyticsJ } from "@/lib/client/types";
+import { useAnalytics, useInsights, useSettings } from "@/lib/client/hooks";
+import { useRouter } from "next/navigation";
+import { KindBadge } from "@/components/kit";
+import { fmtDistance } from "@/lib/client/units";
+import { formatSleepMinutes } from "@/lib/health/metrics";
+import { formatWeightDelta } from "@/lib/units";
+import { StrengthAnalytics } from "@/views/training/analytics-panel";
+import { RunningAnalytics } from "@/views/running/analytics-panel";
+import { HealthAnalytics } from "@/views/health/analytics-panel";
+import { RoutineAnalytics } from "@/views/routines/analytics-panel";
+import type { AnalyticsJ, InsightsJ } from "@/lib/client/types";
 import { fmtKcal, fmtNutrient, fmtPct } from "@/lib/format";
 import { describeGoalRule } from "@/lib/nutrition/goals";
 import { NUTRIENTS, NUTRIENT_BY_KEY, SECONDARY_KEYS, type NutrientKey } from "@/lib/nutrition/nutrients";
@@ -39,19 +48,19 @@ function Overview({ a, goals }: { a: AnalyticsJ; goals: Partial<Record<NutrientK
         <div className="flex flex-col gap-1">
           <p className="text-xs font-medium text-muted">Calories</p>
           <p className="text-fg-2">
-            Highest: {n.extremes.calories.highest ? <Link className="text-fg hover:underline" href={`/?date=${n.extremes.calories.highest.date}`}>{fmtKcal(n.extremes.calories.highest.value)} kcal on {formatLocalDate(n.extremes.calories.highest.date)}</Link> : "—"}
+            Highest: {n.extremes.calories.highest ? <Link className="text-fg hover:underline" href={`/nutrition?date=${n.extremes.calories.highest.date}`}>{fmtKcal(n.extremes.calories.highest.value)} kcal on {formatLocalDate(n.extremes.calories.highest.date)}</Link> : "—"}
           </p>
           <p className="text-fg-2">
-            Lowest: {n.extremes.calories.lowest ? <Link className="text-fg hover:underline" href={`/?date=${n.extremes.calories.lowest.date}`}>{fmtKcal(n.extremes.calories.lowest.value)} kcal on {formatLocalDate(n.extremes.calories.lowest.date)}</Link> : "—"}
+            Lowest: {n.extremes.calories.lowest ? <Link className="text-fg hover:underline" href={`/nutrition?date=${n.extremes.calories.lowest.date}`}>{fmtKcal(n.extremes.calories.lowest.value)} kcal on {formatLocalDate(n.extremes.calories.lowest.date)}</Link> : "—"}
           </p>
         </div>
         <div className="flex flex-col gap-1">
           <p className="text-xs font-medium text-muted">Protein</p>
           <p className="text-fg-2">
-            Highest: {n.extremes.protein.highest ? <Link className="text-fg hover:underline" href={`/?date=${n.extremes.protein.highest.date}`}>{Math.round(n.extremes.protein.highest.value)} g on {formatLocalDate(n.extremes.protein.highest.date)}</Link> : "—"}
+            Highest: {n.extremes.protein.highest ? <Link className="text-fg hover:underline" href={`/nutrition?date=${n.extremes.protein.highest.date}`}>{Math.round(n.extremes.protein.highest.value)} g on {formatLocalDate(n.extremes.protein.highest.date)}</Link> : "—"}
           </p>
           <p className="text-fg-2">
-            Lowest: {n.extremes.protein.lowest ? <Link className="text-fg hover:underline" href={`/?date=${n.extremes.protein.lowest.date}`}>{Math.round(n.extremes.protein.lowest.value)} g on {formatLocalDate(n.extremes.protein.lowest.date)}</Link> : "—"}
+            Lowest: {n.extremes.protein.lowest ? <Link className="text-fg hover:underline" href={`/nutrition?date=${n.extremes.protein.lowest.date}`}>{Math.round(n.extremes.protein.lowest.value)} g on {formatLocalDate(n.extremes.protein.lowest.date)}</Link> : "—"}
           </p>
         </div>
       </div>
@@ -66,7 +75,7 @@ function Adherence({ a }: { a: AnalyticsJ }) {
       <CardTitle sub="Each logged day is judged against the goals that were in effect that day.">Goal adherence</CardTitle>
       {rows.length === 0 ? (
         <p className="text-sm text-muted">
-          No goals set. <Link href="/settings#goals" className="text-accent">Set goals</Link> to track adherence.
+          No goals set. <Link href="/goals#nutrition-targets" className="text-accent">Set goals</Link> to track adherence.
         </p>
       ) : (
         <ul className="flex flex-col gap-3">
@@ -177,12 +186,9 @@ function Relationship({ a, unit }: { a: AnalyticsJ; unit: "kg" | "lb" }) {
   );
 }
 
-export function AnalyticsView() {
+/** Nutrition and body-weight analytics (the original diet-tracker analytics). */
+export function NutritionAnalytics({ qs }: { qs: string }) {
   const settingsQ = useSettings();
-  const [choice, setChoice] = useState<RangeChoice>("30d");
-  const today = settingsQ.data?.today ?? "";
-  const [custom, setCustom] = useState({ start: addDays(today || "2026-01-01", -59), end: today });
-  const qs = choice === "custom" ? `start=${custom.start}&end=${custom.end}` : `range=${choice}`;
   const q = useAnalytics(qs);
   if (!settingsQ.data) return null;
   const unit = settingsQ.data.settings.weightUnit;
@@ -191,23 +197,6 @@ export function AnalyticsView() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Analytics</h1>
-        <Segmented
-          label="Date range"
-          size="sm"
-          value={choice}
-          onChange={setChoice}
-          options={[...RANGE_PRESETS.map((r) => ({ value: r as RangeChoice, label: RANGE_LABELS[r] })), { value: "custom" as RangeChoice, label: "Custom" }]}
-        />
-      </div>
-      {choice === "custom" && (
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <Input type="date" aria-label="Start date" value={custom.start} max={custom.end} onChange={(e) => e.target.value && setCustom({ ...custom, start: e.target.value })} className="w-auto" />
-          <span className="text-muted">to</span>
-          <Input type="date" aria-label="End date" value={custom.end} min={custom.start} max={today} onChange={(e) => e.target.value && setCustom({ ...custom, end: e.target.value })} className="w-auto" />
-        </div>
-      )}
       {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
       {!a ? (
         <Skeleton className="h-[32rem]" />
@@ -249,6 +238,150 @@ export function AnalyticsView() {
           <Relationship a={a} unit={unit} />
         </div>
       )}
+    </div>
+  );
+}
+
+type Tab = "overview" | "nutrition" | "strength" | "running" | "health" | "routines";
+const TABS: { value: Tab; label: string }[] = [
+  { value: "overview", label: "Overview" },
+  { value: "nutrition", label: "Nutrition & body" },
+  { value: "strength", label: "Strength" },
+  { value: "running", label: "Running" },
+  { value: "health", label: "Steps & sleep" },
+  { value: "routines", label: "Routines" },
+];
+const INSIGHT_DAYS: Record<RangePreset, number> = { "7d": 7, "30d": 30, "90d": 90, "6m": 182, "1y": 365, all: 365 };
+
+function SummaryCard({ sum, unit, distanceUnit }: { sum: InsightsJ["summaries"]["weekly"]; unit: "kg" | "lb"; distanceUnit: "mi" | "km" }) {
+  const row = (label: string, value: string, sub?: string) => (
+    <div className="flex items-baseline justify-between gap-3 border-b border-line py-1.5 text-sm last:border-0">
+      <span className="text-fg-2">{label}</span>
+      <span className="text-right tabular text-fg">
+        {value}
+        {sub && <span className="ml-1 text-xs text-muted">{sub}</span>}
+      </span>
+    </div>
+  );
+  const pctTxt = (x: number | null) => (x == null ? "—" : `${Math.round(x * 100)}%`);
+  return (
+    <Card>
+      <CardTitle sub={sum.days > 1 ? `${formatLocalDate(sum.range.start, { month: "short", day: "numeric" })} – ${formatLocalDate(sum.range.end, { month: "short", day: "numeric" })}` : formatLocalDate(sum.range.start)}>{sum.label}</CardTitle>
+      {row("Avg calories", sum.nutrition.avgCalories == null ? "—" : `${fmtKcal(sum.nutrition.avgCalories)} kcal`, `${sum.nutrition.loggedDays} logged day${sum.nutrition.loggedDays === 1 ? "" : "s"}`)}
+      {row("Avg protein", sum.nutrition.avgProtein == null ? "—" : `${Math.round(sum.nutrition.avgProtein)} g`, sum.nutrition.proteinTargetDays != null ? `target met ${sum.nutrition.proteinTargetDays}×` : undefined)}
+      {row("Weight change", sum.body.changeKg == null ? "—" : formatWeightDelta(sum.body.changeKg, unit), `${sum.body.weighInDays} weigh-in days`)}
+      {row("Workouts", String(sum.training.workouts), `${sum.training.sets} sets`)}
+      {row("Run days", String(sum.running.runDays), `${fmtDistance(sum.running.distanceM, distanceUnit)} · ${sum.running.restDays} rest`)}
+      {row("Run consistency", pctTxt(sum.running.consistencyPct), "rest days excluded")}
+      {row("Avg steps", sum.health.avgSteps == null ? "—" : Math.round(sum.health.avgSteps).toLocaleString(), `${sum.health.stepDays} days with data`)}
+      {row("Avg sleep", formatSleepMinutes(sum.health.avgSleepMin), `${sum.health.sleepDays} nights`)}
+      {row("Morning routine", pctTxt(sum.routines.morningPct), "complete days")}
+      {row("Nightly routine", pctTxt(sum.routines.nightPct), "complete days")}
+      {row("Journaling", `${sum.routines.journalDays} days`, `${Math.round(sum.routines.readingTotal)} pages read`)}
+    </Card>
+  );
+}
+
+function OverviewTab({ range }: { range: RangePreset }) {
+  const settingsQ = useSettings();
+  const q = useInsights(INSIGHT_DAYS[range]);
+  const [domain, setDomain] = useState<string>("all");
+  if (!settingsQ.data) return null;
+  const s = settingsQ.data.settings;
+  const d = q.data;
+  const domains = ["all", ...new Set(d?.insights.map((i) => i.domain) ?? [])];
+  const list = (d?.insights ?? []).filter((i) => domain === "all" || i.domain === domain);
+  return (
+    <div className="flex flex-col gap-4">
+      {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
+      <Card>
+        <CardTitle sub="Computed only from your recorded data. Measured = counts of what you logged; Estimate = model-based (e.g. estimated 1RM); Pattern = an association in your data, not proof of cause.">
+          <span className="inline-flex items-center gap-2">
+            <Lightbulb className="size-4 text-accent" /> Insights
+          </span>
+        </CardTitle>
+        {domains.length > 2 && (
+          <div className="mb-3">
+            <Segmented label="Insight area" size="sm" value={domain} onChange={setDomain} options={domains.map((x) => ({ value: x, label: x === "all" ? "All" : x[0].toUpperCase() + x.slice(1) }))} />
+          </div>
+        )}
+        {!d ? (
+          <Skeleton className="h-40" />
+        ) : list.length === 0 ? (
+          <p className="text-sm text-muted">Not enough data in this period for reliable insights yet. Keep logging meals, workouts, runs, routines and syncing steps & sleep.</p>
+        ) : (
+          <ul className="flex flex-col gap-3">
+            {list.map((i) => (
+              <li key={i.id} className={`rounded-lg border px-3 py-2.5 ${i.tone === "caution" ? "border-warning/50 bg-warning-soft" : "border-line"}`}>
+                <div className="mb-0.5 flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium text-fg">{i.title}</span>
+                  <KindBadge kind={i.kind} />
+                  <span className="text-xs text-muted capitalize">{i.domain}</span>
+                </div>
+                <p className="text-sm text-fg-2">{i.detail}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+      {d && (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <SummaryCard sum={d.summaries.daily} unit={s.weightUnit} distanceUnit={s.distanceUnit} />
+          <SummaryCard sum={d.summaries.weekly} unit={s.weightUnit} distanceUnit={s.distanceUnit} />
+          <SummaryCard sum={d.summaries.monthly} unit={s.weightUnit} distanceUnit={s.distanceUnit} />
+        </div>
+      )}
+      <p className="text-xs text-muted">
+        Want a narrative? Ask the <Link href="/assistant" className="text-accent">AI assistant</Link> — its answers are AI-generated observations based on the same data.
+      </p>
+    </div>
+  );
+}
+
+export function AnalyticsView({ initialTab }: { initialTab?: string | null }) {
+  const router = useRouter();
+  const settingsQ = useSettings();
+  const [tab, setTab] = useState<Tab>(TABS.some((t) => t.value === initialTab) ? (initialTab as Tab) : "overview");
+  const [choice, setChoice] = useState<RangeChoice>("30d");
+  const today = settingsQ.data?.today ?? "";
+  const [custom, setCustom] = useState({ start: addDays(today || "2026-01-01", -59), end: today });
+  if (!settingsQ.data) return null;
+  const preset: RangePreset = choice === "custom" ? "90d" : choice;
+  const qs = choice === "custom" ? `start=${custom.start}&end=${custom.end}` : `range=${choice}`;
+  const changeTab = (t: Tab) => {
+    setTab(t);
+    if (t !== "nutrition" && choice === "custom") setChoice("90d");
+    router.replace(t === "overview" ? "/analytics" : `/analytics?tab=${t}`, { scroll: false });
+  };
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-xl font-semibold">Analytics</h1>
+        <Segmented
+          label="Date range"
+          size="sm"
+          value={choice}
+          onChange={setChoice}
+          options={[...RANGE_PRESETS.map((r) => ({ value: r as RangeChoice, label: r === "all" ? "All" : r.toUpperCase() })), ...(tab === "nutrition" ? [{ value: "custom" as RangeChoice, label: "Custom" }] : [])]}
+        />
+      </div>
+      <div className="-mx-1 overflow-x-auto px-1">
+        <Segmented label="Analytics area" value={tab} onChange={changeTab} options={TABS} />
+      </div>
+      {choice === "custom" && tab === "nutrition" && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <Input type="date" aria-label="Start date" value={custom.start} max={custom.end} onChange={(e) => e.target.value && setCustom({ ...custom, start: e.target.value })} className="w-auto" />
+          <span className="text-muted">to</span>
+          <Input type="date" aria-label="End date" value={custom.end} min={custom.start} max={today} onChange={(e) => e.target.value && setCustom({ ...custom, end: e.target.value })} className="w-auto" />
+        </div>
+      )}
+      <p className="text-xs text-muted">{RANGE_LABELS[preset]}{choice === "custom" ? " (custom)" : ""}</p>
+      {tab === "overview" && <OverviewTab range={preset} />}
+      {tab === "nutrition" && <NutritionAnalytics qs={qs} />}
+      {tab === "strength" && <StrengthAnalytics range={preset} />}
+      {tab === "running" && <RunningAnalytics range={preset} />}
+      {tab === "health" && <HealthAnalytics range={preset} />}
+      {tab === "routines" && <RoutineAnalytics range={preset} />}
     </div>
   );
 }

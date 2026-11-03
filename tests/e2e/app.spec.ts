@@ -34,13 +34,16 @@ test("onboarding sets units, time zone, weights and versioned goals", async ({ p
   await page.getByLabel("Fat (g)").fill("70");
   await page.getByRole("button", { name: "Save goals" }).click();
   await expect(page).toHaveURL("http://localhost:3200/");
-  await expect(page.getByText("/ 2,000 kcal")).toBeVisible();
+  // The unified dashboard shows nutrition progress alongside everything else.
   await expect(page.getByText("150 g to go")).toBeVisible();
+  await page.goto("/nutrition");
+  await expect(page.getByText("/ 2,000 kcal")).toBeVisible();
 });
 
 test("weight: log, conflict → replace, edit and delete", async ({ page }) => {
   page.on("dialog", (d) => d.accept());
   await login(page);
+  await page.goto("/nutrition");
   const card = page.locator("section, div").filter({ has: page.getByRole("heading", { name: "Weight", exact: true }) }).first();
   await card.getByRole("radio", { name: "Morning" }).click();
   await card.getByLabel("Weight in lb").fill("200.4");
@@ -116,7 +119,7 @@ test("food: search → review → edit → save; edits, copies and deletes updat
 
   await page.getByLabel("Title").fill("Oat breakfast");
   await page.getByRole("button", { name: "Save meal" }).click();
-  await expect(page).toHaveURL("http://localhost:3200/");
+  await expect(page).toHaveURL("http://localhost:3200/nutrition");
   await expect(page.getByRole("link", { name: /Oat breakfast/ }).first()).toBeVisible();
   await expect(page.getByText("1,190 kcal remaining")).toBeVisible();
 
@@ -129,7 +132,7 @@ test("food: search → review → edit → save; edits, copies and deletes updat
   await expect(page.getByText("Meal updated")).toBeVisible();
   await expect(page.getByText("510 kcal").first()).toBeVisible();
 
-  await page.goto("/");
+  await page.goto("/nutrition");
   await expect(page.getByText("1,490 kcal remaining")).toBeVisible();
   // Copy, then delete the copy.
   await page.getByRole("button", { name: "Log “Oat breakfast” again now" }).click();
@@ -142,13 +145,14 @@ test("food: search → review → edit → save; edits, copies and deletes updat
 
 test("saved meals log as independent copies", async ({ page }) => {
   await login(page);
+  await page.goto("/nutrition");
   await page.getByRole("link", { name: /Oat breakfast/ }).first().click();
   await page.getByRole("button", { name: "Save as favorite" }).click();
   await expect(page.getByText(/Saved to favorites/)).toBeVisible();
   await page.goto("/log");
   await page.getByRole("radio", { name: "Saved" }).click();
   await page.getByRole("button", { name: "Log", exact: true }).first().click();
-  await expect(page).toHaveURL("http://localhost:3200/");
+  await expect(page).toHaveURL("http://localhost:3200/nutrition");
   await expect(page.getByText("2 meals logged")).toBeVisible();
 });
 
@@ -195,7 +199,7 @@ test("history, analytics and exports reflect the logged data", async ({ page }) 
   const day = await today(page);
   await page.goto("/history");
   await expect(page.getByText("1 of").first()).toBeVisible();
-  await page.goto("/analytics");
+  await page.goto("/analytics?tab=nutrition");
   await expect(page.getByText(/Food logged on/)).toContainText("1");
   await expect(page.getByRole("heading", { name: "Calories", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Show Calories as a table" }).click();
@@ -211,7 +215,7 @@ test("history, analytics and exports reflect the logged data", async ({ page }) 
   expect(backup.meals.length).toBe(2);
 });
 
-test("mobile layout: bottom navigation and quick weight entry", async ({ browser }) => {
+test("mobile layout: bottom navigation, quick add and no horizontal scrolling", async ({ browser }) => {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: "America/New_York" });
   const page = await ctx.newPage();
   await page.goto("/login");
@@ -219,14 +223,25 @@ test("mobile layout: bottom navigation and quick weight entry", async ({ browser
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL("http://localhost:3200/");
   const nav = page.getByRole("navigation", { name: "Main" }).last();
-  await expect(nav.getByRole("link", { name: "Log food" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Today" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Food" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Train" })).toBeVisible();
   const noOverflow = async () => expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
-  await expect(page.getByText("kcal remaining")).toBeVisible();
   await noOverflow();
-  await nav.getByRole("link", { name: "Weight" }).click();
+  // Quick add opens every logging shortcut.
+  await nav.getByRole("button", { name: "Quick add" }).click();
+  const quick = page.getByRole("dialog");
+  for (const name of ["Meal", "Weigh-in", "Workout", "Run", "Morning", "Night", "Journal"]) await expect(quick.getByRole("link", { name, exact: true })).toBeVisible();
+  await quick.getByRole("button", { name: "Close" }).click();
+  // "More" reaches every section.
+  await nav.getByRole("button", { name: "More" }).click();
+  await page.getByRole("dialog").getByRole("link", { name: "Weight", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Weight", exact: true }).first()).toBeVisible();
   await noOverflow();
-  for (const path of ["/log", "/history", "/analytics", "/settings"]) {
+  await page.goto("/nutrition");
+  await expect(page.getByText("kcal remaining")).toBeVisible();
+  await noOverflow();
+  for (const path of ["/log", "/history", "/analytics", "/settings", "/goals", "/training", "/training/exercises", "/training/records", "/training/templates", "/training/history", "/running", "/health", "/health/connect", "/routines/morning", "/routines/night", "/journal", "/analytics?tab=strength", "/analytics?tab=running", "/analytics?tab=health", "/analytics?tab=routines"]) {
     await page.goto(path);
     await page.waitForLoadState("networkidle");
     await noOverflow();

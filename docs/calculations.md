@@ -89,3 +89,81 @@ maintenance; weight-loss options are −10% or −20% at most, never below
 1,500 kcal (male equation) / 1,200 kcal (female equation). Protein 1.6 g/kg,
 fat ~30% of calories, carbohydrates the remainder. Suggestions are only
 applied if you choose to save them.
+
+## Goals
+
+Goal progress is computed on every read from the underlying records
+(`src/lib/goals/engine.ts`); nothing is cached.
+
+- **Periods.** Daily goals are judged per calendar day; weekly goals per week
+  (your week start); monthly per calendar month; custom goals in blocks of *N*
+  days anchored on the goal's start date. History covers up to the last 366
+  days.
+- **Targets over time.** Changing a target applies from today. Each period is
+  judged against the target in force on its first day, so past results never
+  change when you raise or lower a goal.
+- **Combining days.** Sum (distance, steps, workouts, pages), average over days
+  with data (calories, sleep), days meeting a daily threshold ("protein ≥ 150 g
+  on 5 days a week"), latest level (7-day average weight, best lift so far),
+  share of eligible days (running consistency) and weekly rate (weight trend:
+  least-squares slope over the 21 days ending with the week; needs 6+ weigh-in
+  days spanning 10+ days).
+- **Status.** A past period is *met*, *missed* or *no data* (nothing recorded,
+  e.g. no steps synced); the current period is *in progress* until an
+  "at least" running total reaches its target. Paused spans and, for running
+  goals, planned rest/recovery days are *excused*.
+- **Streaks** count consecutive met periods; excused and paused periods are
+  skipped (they neither break nor extend a streak) and the current period never
+  breaks a streak while it's still open. **Success rate** = met ÷ (met +
+  missed + no data) over completed periods.
+- **Projection** (weekly/monthly sums and counts) = current value + daily pace
+  × remaining days. It is labeled as an estimate.
+- **Linked goals.** Daily nutrition targets use the same rules as the nutrition
+  dashboard (calories, carbs, fat within ±10%; protein at or above; limits at
+  or below). Target weight uses the 7-day average weight.
+
+## Running
+
+- A day is **done** when a run is logged and — if the daily goal has a minimum
+  distance and the run has a distance — the day's total reaches it. A run
+  logged without a distance counts as done (you said you ran). Below the
+  minimum is **short**. A planned **rest** or **recovery** day is excused;
+  a past day with nothing logged is **missed**; today is **pending**.
+- **Streak:** consecutive done days; rest/recovery and today-pending are
+  skipped. **Consistency** = done ÷ (done + short + missed), excluding planned
+  days off and days before you started tracking.
+- **Days without rest:** consecutive days with a run and no rest/recovery
+  day. At 10+ the app suggests planning a recovery day.
+- No pace or duration is stored or computed.
+
+## Steps & sleep
+
+- One value per day, metric and source; a later sync replaces the earlier
+  value. When several sources report a day, the most recently synced one is
+  shown and the others listed — never summed.
+- Sleep from raw samples: samples within 3 hours of each other form a night;
+  asleep time is the union of asleep intervals (core, deep, REM, unspecified)
+  across sources; stage minutes come from the single source with the most
+  staged sleep; the night belongs to the day you woke up.
+- Averages use days with data only; trend is a least-squares slope per week
+  (needs 7+ days).
+
+## Routines
+
+- A day's completion = completed required activities ÷ required activities
+  that existed that day (`active_from` ≤ day < `archived_on`). Optional
+  activities are tracked but don't affect the percentage.
+- Reading/count activities complete automatically when the amount reaches the
+  target; writing a journal entry completes that routine's journaling activity.
+- Completion % over a range = fully complete days ÷ tracked days (today counts
+  only once complete). Per-activity rate = days done ÷ days the activity was
+  part of the routine.
+
+## Insights
+
+Generated from the last *N* days (`src/lib/services/insights.ts`). Each is
+labeled *Measured*, *Estimate* or *Pattern*, and needs a minimum amount of data
+(typically 5+ days; the sleep-vs-lifting comparison needs 4+ sessions after
+both short and long nights). Cautions (very low intake, losing more than 1% of
+body weight per week, 10+ days without rest, mostly maximal-effort runs) are
+shown first.

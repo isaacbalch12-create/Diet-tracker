@@ -128,12 +128,12 @@ export function MealDetailView({ id }: { id: string }) {
       await api.del(`/api/meals/${meal.id}`);
       await invalidate();
       toast.success("Meal deleted");
-      router.push(`/?date=${meal.localDate}`);
+      router.push(`/nutrition?date=${meal.localDate}`);
     });
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-4">
-      <Link href={`/?date=${meal.localDate}`} className="inline-flex items-center gap-1 text-sm text-muted hover:text-fg">
+      <Link href={`/nutrition?date=${meal.localDate}`} className="inline-flex items-center gap-1 text-sm text-muted hover:text-fg">
         <ArrowLeft className="size-4" /> {formatLocalDate(meal.localDate, { weekday: "long", month: "long", day: "numeric" })}
       </Link>
       <div className="flex flex-wrap items-start justify-between gap-3">

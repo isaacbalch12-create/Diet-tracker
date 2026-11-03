@@ -1,15 +1,15 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { Bell, CheckCircle2, Database, Download, Monitor, Moon, Sun, Upload, X, XCircle } from "lucide-react";
+import { Bell, CheckCircle2, Database, Download, Dumbbell, Footprints, Monitor, Moon, Sun, Upload, X, XCircle } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
 import { FoodDbLoader } from "@/components/food-db-loader";
-import { GoalsForm } from "@/components/goals-form";
 import { useToast } from "@/components/toast";
 import { Badge, Button, Card, CardTitle, ErrorBanner, Field, Input, Segmented, Select } from "@/components/ui";
 import { api } from "@/lib/client/api";
 import { useSettings } from "@/lib/client/hooks";
-import type { SettingsResponse } from "@/lib/client/types";
+import type { LiftlogImportSummaryJ, SettingsResponse } from "@/lib/client/types";
 import { fromKg, type WeightUnit } from "@/lib/units";
 
 export function timeZones(): string[] {
@@ -26,7 +26,7 @@ function ProfileSection({ data }: { data: SettingsResponse }) {
   const s = data.settings;
   const browserTz = typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC";
   const zones = useMemo(() => timeZones(), []);
-  const [f, setF] = useState({ weightUnit: s.weightUnit, timezone: s.timezone, dayStartHour: s.dayStartHour, weekStartsOn: s.weekStartsOn });
+  const [f, setF] = useState({ weightUnit: s.weightUnit, distanceUnit: s.distanceUnit, waterUnit: s.waterUnit, timezone: s.timezone, dayStartHour: s.dayStartHour, weekStartsOn: s.weekStartsOn });
   const [saving, setSaving] = useState(false);
   const save = async () => {
     setSaving(true);
@@ -42,7 +42,7 @@ function ProfileSection({ data }: { data: SettingsResponse }) {
   };
   return (
     <Card>
-      <CardTitle sub="Records keep the time zone they were logged in; changing it here affects new entries and what “today” means.">Units &amp; time</CardTitle>
+      <CardTitle sub="Weight unit applies to body weight and lifting. Records keep the time zone they were logged in; changing it here affects new entries and what “today” means.">Units &amp; time</CardTitle>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Weight unit">
           {() => (
@@ -53,6 +53,32 @@ function ProfileSection({ data }: { data: SettingsResponse }) {
               options={[
                 { value: "lb", label: "Pounds (lb)" },
                 { value: "kg", label: "Kilograms (kg)" },
+              ]}
+            />
+          )}
+        </Field>
+        <Field label="Distance unit">
+          {() => (
+            <Segmented
+              label="Distance unit"
+              value={f.distanceUnit}
+              onChange={(v) => setF({ ...f, distanceUnit: v })}
+              options={[
+                { value: "mi", label: "Miles" },
+                { value: "km", label: "Kilometers" },
+              ]}
+            />
+          )}
+        </Field>
+        <Field label="Water unit">
+          {() => (
+            <Segmented
+              label="Water unit"
+              value={f.waterUnit}
+              onChange={(v) => setF({ ...f, waterUnit: v })}
+              options={[
+                { value: "oz", label: "Fluid ounces" },
+                { value: "ml", label: "Milliliters" },
               ]}
             />
           )}
@@ -93,7 +119,7 @@ function ProfileSection({ data }: { data: SettingsResponse }) {
   );
 }
 
-function WeightGoalsSection({ data }: { data: SettingsResponse }) {
+export function WeightGoalsSection({ data }: { data: SettingsResponse }) {
   const toast = useToast();
   const qc = useQueryClient();
   const s = data.settings;
@@ -175,6 +201,172 @@ function CategoriesSection({ data }: { data: SettingsResponse }) {
           Add
         </Button>
       </form>
+    </Card>
+  );
+}
+
+
+function TrainingSection({ data }: { data: SettingsResponse }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const s = data.settings;
+  const [f, setF] = useState({ oneRmFormula: s.oneRmFormula, maxRepsFor1rm: s.maxRepsFor1rm, showRpe: s.showRpe });
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.patch("/api/settings", f);
+      await qc.invalidateQueries();
+      toast.success("Training preferences saved");
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Card>
+      <CardTitle sub="Estimated 1RM is a model, not a measurement, and is always labeled as an estimate. Sets above the rep cap are never used for 1RM records or trends.">
+        <span className="inline-flex items-center gap-2">
+          <Dumbbell className="size-4" /> Strength training
+        </span>
+      </CardTitle>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <Field label="Estimated 1RM formula">
+          {(id) => (
+            <Select id={id} value={f.oneRmFormula} onChange={(e) => setF({ ...f, oneRmFormula: e.target.value as "epley" | "brzycki" })}>
+              <option value="epley">Epley — weight × (1 + reps ÷ 30)</option>
+              <option value="brzycki">Brzycki — weight × 36 ÷ (37 − reps)</option>
+            </Select>
+          )}
+        </Field>
+        <Field label="Rep cap for 1RM estimates">
+          {(id) => (
+            <Select id={id} value={f.maxRepsFor1rm} onChange={(e) => setF({ ...f, maxRepsFor1rm: Number(e.target.value) })}>
+              {[5, 6, 8, 10, 12, 15, 20].map((n) => (
+                <option key={n} value={n}>
+                  {n} reps
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+        <label className="flex h-10 items-center gap-2 self-end text-sm text-fg-2">
+          <input type="checkbox" className="size-4 accent-[var(--accent)]" checked={f.showRpe} onChange={(e) => setF({ ...f, showRpe: e.target.checked })} /> Show RPE column when logging
+        </label>
+      </div>
+      <Button className="mt-4" onClick={save} loading={saving}>
+        Save training preferences
+      </Button>
+    </Card>
+  );
+}
+
+function RunTypesSection({ data }: { data: SettingsResponse }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [types, setTypes] = useState<string[]>(data.settings.runTypes);
+  const [add, setAdd] = useState("");
+  const save = async (next: string[]) => {
+    setTypes(next);
+    try {
+      await api.patch("/api/settings", { runTypes: next });
+      await qc.invalidateQueries({ queryKey: ["settings"] });
+    } catch (err) {
+      toast.error(err);
+      setTypes(data.settings.runTypes);
+    }
+  };
+  return (
+    <Card>
+      <CardTitle sub="Shown as quick choices when you log a run. Removing one doesn't change runs already logged.">
+        <span className="inline-flex items-center gap-2">
+          <Footprints className="size-4" /> Run types
+        </span>
+      </CardTitle>
+      <ul className="flex flex-wrap gap-2">
+        {types.map((c) => (
+          <li key={c} className="inline-flex items-center gap-1 rounded-full border border-line-strong py-1 pr-1 pl-3 text-sm">
+            {c}
+            <button type="button" aria-label={`Remove ${c}`} disabled={types.length <= 1} onClick={() => save(types.filter((x) => x !== c))} className="rounded-full p-0.5 text-muted hover:bg-surface-2 hover:text-fg disabled:opacity-30">
+              <X className="size-3.5" />
+            </button>
+          </li>
+        ))}
+      </ul>
+      <form
+        className="mt-3 flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const v = add.trim();
+          if (v && !types.some((c) => c.toLowerCase() === v.toLowerCase())) save([...types, v]);
+          setAdd("");
+        }}
+      >
+        <Input aria-label="New run type" value={add} onChange={(e) => setAdd(e.target.value)} placeholder="New run type" className="max-w-xs" maxLength={40} />
+        <Button type="submit" variant="secondary" disabled={!add.trim()}>
+          Add
+        </Button>
+      </form>
+    </Card>
+  );
+}
+
+function LiftlogImportSection() {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<LiftlogImportSummaryJ | null>(null);
+  const run = async (file: File) => {
+    setBusy(true);
+    setResult(null);
+    try {
+      const text = await file.text();
+      const res = await fetch("/api/import/liftlog", { method: "POST", headers: { "Content-Type": "application/json" }, body: text, credentials: "same-origin" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error?.message ?? "Import failed");
+      setResult(data.imported);
+      await qc.invalidateQueries();
+      toast.success("LiftLog history imported");
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card id="import-liftlog">
+      <CardTitle sub="Your LiftLog workouts live in your phone's browser. In LiftLog open Settings → Backup (JSON), save the file, then choose it here. Importing is safe to repeat: records are matched by their LiftLog ids, so nothing is duplicated, and newer LiftLog edits update older copies.">
+        <span className="inline-flex items-center gap-2">
+          <Upload className="size-4" /> Import workouts from LiftLog
+        </span>
+      </CardTitle>
+      <Button variant="secondary" onClick={() => fileRef.current?.click()} loading={busy}>
+        <Upload className="size-4" /> Choose LiftLog backup…
+      </Button>
+      <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={(e) => e.target.files?.[0] && run(e.target.files[0]).finally(() => (e.target.value = ""))} />
+      {result && (
+        <div className="mt-3 rounded-lg bg-surface-2 p-3 text-sm text-fg-2">
+          <p className="font-medium text-fg">Import complete</p>
+          <ul className="mt-1 list-disc pl-5">
+            <li>
+              Workouts: {result.workoutsAdded} added, {result.workoutsUpdated} updated, {result.workoutsUnchanged} already up to date ({result.sets} sets)
+            </li>
+            <li>
+              Exercises: {result.exercisesAdded} added, {result.exercisesUpdated} updated{result.placeholders ? `, ${result.placeholders} placeholders for missing exercises` : ""}
+            </li>
+            <li>
+              Templates: {result.templatesAdded} added, {result.templatesUpdated} updated
+            </li>
+            {result.weeklyGoalCreated && <li>Your LiftLog weekly target was added as a goal.</li>}
+            {result.skippedOrphans > 0 && <li>{result.skippedOrphans} orphaned rows in the file were skipped.</li>}
+            {result.notes.map((n) => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </Card>
   );
 }
@@ -278,7 +470,7 @@ function DataSection() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [restoring, setRestoring] = useState(false);
   const restore = async (file: File) => {
-    const typed = window.prompt("Restoring replaces ALL current records (meals, weights, goals, settings) with the backup. Type REPLACE to continue.");
+    const typed = window.prompt("Restoring replaces ALL current records in the areas the backup contains (a full backup covers everything: meals, weights, workouts, runs, health data, routines, journal, goals, settings). Type REPLACE to continue.");
     if (typed !== "REPLACE") return;
     setRestoring(true);
     try {
@@ -287,7 +479,7 @@ function DataSection() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error?.message ?? "Restore failed");
       await qc.invalidateQueries();
-      toast.success(`Restored ${data.restored.meals} meals and ${data.restored.weights} weigh-ins`);
+      toast.success(`Restored ${data.restored.meals} meals, ${data.restored.weights} weigh-ins, ${data.restored.workouts} workouts and ${data.restored.runs} runs`);
     } catch (err) {
       toast.error(err);
     } finally {
@@ -297,7 +489,10 @@ function DataSection() {
   const links = [
     ["Weights (CSV)", "/api/export?type=weights"],
     ["Food log — one row per food (CSV)", "/api/export?type=meals"],
-    ["Daily summary (CSV)", "/api/export?type=daily"],
+    ["Daily summary — every metric (CSV)", "/api/export?type=daily"],
+    ["Workout sets (CSV)", "/api/export?type=sets"],
+    ["Runs & rest days (CSV)", "/api/export?type=runs"],
+    ["Steps, sleep & health (CSV)", "/api/export?type=health"],
     ["Full backup (JSON)", "/api/export?type=backup"],
     ["Full backup with photos (JSON)", "/api/export?type=backup&images=1"],
   ];
@@ -316,7 +511,7 @@ function DataSection() {
           <Upload className="size-4" /> Restore from backup…
         </Button>
         <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={(e) => e.target.files?.[0] && restore(e.target.files[0]).finally(() => (e.target.value = ""))} />
-        <p className="mt-2 text-xs text-muted">Replaces all current records after a confirmation. Reference USDA foods are kept.</p>
+        <p className="mt-2 text-xs text-muted">Replaces current records after a confirmation. Reference USDA foods are kept. Older diet-only backups restore just the nutrition data and leave training, running, health and routine data untouched.</p>
       </div>
     </Card>
   );
@@ -366,6 +561,9 @@ function StatusSection({ data }: { data: SettingsResponse }) {
         <StatusRow ok={st.authMode === "password" ? true : "warn"} label="Sign-in">
           {st.authMode === "password" ? "Password protected." : "Open (local development mode). Set APP_PASSWORD and SESSION_SECRET before deploying."}
         </StatusRow>
+        <StatusRow ok label="Phone health data">
+          Steps and sleep arrive from your phone through a token-protected sync endpoint. <Link href="/health/connect" className="text-accent">Manage connections</Link>
+        </StatusRow>
         <StatusRow ok label="Storage">
           {st.database === "postgres" ? "PostgreSQL" : "Embedded PostgreSQL (PGlite) on this machine"} · photos in {st.imageStorage === "s3" ? "S3-compatible storage" : "the database"}
         </StatusRow>
@@ -387,26 +585,20 @@ export function SettingsView() {
     <div className="mx-auto flex max-w-3xl flex-col gap-4">
       <h1 className="text-xl font-semibold">Settings</h1>
       <Card id="goals">
-        <CardTitle sub="Leave a field blank for no goal. Calories, carbs and fat count as met within ±10%; protein when at or above the goal.">Daily nutrition goals</CardTitle>
-        <GoalsForm data={data} key={JSON.stringify(data.goals)} />
-        {data.goalHistory.length > 1 && (
-          <details className="mt-4 text-sm">
-            <summary className="cursor-pointer text-fg-2">Goal history ({data.goalHistory.length} versions)</summary>
-            <ul className="mt-2 flex flex-col gap-1 text-fg-2 tabular">
-              {[...data.goalHistory].reverse().map((g) => (
-                <li key={g.effectiveFrom}>
-                  {g.effectiveFrom === "2000-01-01" ? "Initial" : `From ${g.effectiveFrom}`}: {g.calories ?? "—"} kcal · P {g.protein ?? "—"} · C {g.carbs ?? "—"} · F {g.fat ?? "—"}
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
+        <CardTitle sub="Daily nutrition targets, weight goals and every other goal now live together on the Goals page.">Goals</CardTitle>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/goals#nutrition-targets"><Button variant="secondary">Nutrition targets</Button></Link>
+          <Link href="/goals#weight-goals"><Button variant="secondary">Weight goals</Button></Link>
+          <Link href="/goals"><Button variant="secondary">All goals</Button></Link>
+        </div>
       </Card>
-      <WeightGoalsSection data={data} key={`w${data.settings.updatedAt}`} />
       <ProfileSection data={data} key={`p${data.settings.updatedAt}`} />
+      <TrainingSection data={data} key={`t${data.settings.updatedAt}`} />
       <CategoriesSection data={data} />
+      <RunTypesSection data={data} />
       <RemindersSection data={data} />
       <AppearanceSection />
+      <LiftlogImportSection />
       <DataSection />
       <StatusSection data={data} />
     </div>

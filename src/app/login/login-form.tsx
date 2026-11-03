@@ -28,7 +28,7 @@ export function LoginForm({ next }: { next: string }) {
           <span className="flex size-9 items-center justify-center rounded-lg bg-accent text-accent-fg">
             <UtensilsCrossed className="size-4" />
           </span>
-          <h1 className="text-lg font-semibold">Diet Tracker</h1>
+          <h1 className="text-lg font-semibold">Momentum</h1>
         </div>
         <Field label="Password">{(id) => <Input id={id} type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus required />}</Field>
         {error ? <ErrorBanner error={error} /> : null}

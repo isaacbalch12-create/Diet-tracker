@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { UtensilsCrossed } from "lucide-react";
+import { Zap } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { GoalsForm } from "@/components/goals-form";
@@ -17,6 +17,7 @@ export function WelcomeView() {
   const zones = useMemo(() => timeZones(), []);
   const browserTz = typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC";
   const [unit, setUnit] = useState<"lb" | "kg">("lb");
+  const [distanceUnit, setDistanceUnit] = useState<"mi" | "km">("mi");
   const [tz, setTz] = useState(browserTz);
   const [start, setStart] = useState("");
   const [target, setTarget] = useState("");
@@ -31,6 +32,8 @@ export function WelcomeView() {
     try {
       await api.patch("/api/settings", {
         weightUnit: unit,
+        distanceUnit,
+        waterUnit: distanceUnit === "mi" ? "oz" : "ml",
         timezone: tz,
         startingWeight: start.trim() ? { value: Number(start), unit } : undefined,
         targetWeight: target.trim() ? { value: Number(target), unit } : undefined,
@@ -53,11 +56,11 @@ export function WelcomeView() {
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
       <div className="flex items-center gap-3">
         <span className="flex size-10 items-center justify-center rounded-xl bg-accent text-accent-fg">
-          <UtensilsCrossed className="size-5" />
+          <Zap className="size-5" />
         </span>
         <div>
-          <h1 className="text-xl font-semibold">Welcome to Diet Tracker</h1>
-          <p className="text-sm text-muted">Two quick steps. Everything can be changed later in Settings.</p>
+          <h1 className="text-xl font-semibold">Welcome to Momentum</h1>
+          <p className="text-sm text-muted">Nutrition, training, daily running, steps, sleep and your morning and nightly routines in one place. Two quick steps — everything can be changed later.</p>
         </div>
       </div>
       {step === 1 ? (
@@ -73,6 +76,19 @@ export function WelcomeView() {
                   options={[
                     { value: "lb", label: "Pounds" },
                     { value: "kg", label: "Kilograms" },
+                  ]}
+                />
+              )}
+            </Field>
+            <Field label="Distance unit">
+              {() => (
+                <Segmented
+                  label="Distance unit"
+                  value={distanceUnit}
+                  onChange={setDistanceUnit}
+                  options={[
+                    { value: "mi", label: "Miles" },
+                    { value: "km", label: "Kilometers" },
                   ]}
                 />
               )}
@@ -98,7 +114,7 @@ export function WelcomeView() {
         </Card>
       ) : (
         <Card>
-          <CardTitle sub="Optional — set goals now, use the calculator for a starting point, or skip.">2. Daily nutrition goals</CardTitle>
+          <CardTitle sub="Optional — set nutrition targets now (the calculator gives a starting point) or skip. Default routines and a “run every day” goal are already set up; customize them anytime.">2. Daily nutrition goals</CardTitle>
           <GoalsForm data={q.data} onSaved={finish} />
           <div className="mt-4 border-t border-line pt-3">
             <Button variant="ghost" onClick={finish}>
