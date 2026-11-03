@@ -39,7 +39,7 @@ const TODAY = "2026-11-02"; // Monday
 
 beforeEach(async () => {
   db = await createMemoryDb();
-  s = await updateSettings(db, { timezone: "America/New_York", weightUnit: "lb", weekStartsOn: 1 });
+  s = await updateSettings(db, { timezone: "America/New_York", weightUnit: "lb", weekStartsOn: 1, onboarded: true });
 });
 
 let seq = 0;
@@ -279,6 +279,7 @@ describe("phone health ingest", () => {
 
 describe("routines and journal", () => {
   it("seeds editable defaults once and tracks completion against that day's activities", async () => {
+    expect(await ensureDefaults(db, { ...s, onboarded: false }, TODAY)).toBe(false); // waits for onboarding
     expect(await ensureDefaults(db, s, TODAY)).toBe(true);
     expect(await ensureDefaults(db, await getSettings(db), TODAY)).toBe(false);
     const morning = await getRoutineDay(db, "morning", TODAY);

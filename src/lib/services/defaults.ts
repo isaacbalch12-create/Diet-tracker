@@ -33,7 +33,8 @@ export const DEFAULT_MORNING_PROMPTS = ["What am I grateful for this morning?", 
 export const DEFAULT_NIGHT_PROMPTS = ["What went well today?", "What could I have done better?", "What did I accomplish?", "What do I want to accomplish tomorrow?"];
 
 export async function ensureDefaults(db: Db, s: Settings, today: LocalDate): Promise<boolean> {
-  if (s.defaultsSeeded) return false;
+  // Wait for onboarding: until the time zone is chosen, "today" may be a different calendar day.
+  if (s.defaultsSeeded || !s.onboarded) return false;
   await db.transaction(async (tx) => {
     const [row] = await tx.select({ seeded: settingsTable.defaultsSeeded }).from(settingsTable).where(eq(settingsTable.id, 1));
     if (row?.seeded) return;

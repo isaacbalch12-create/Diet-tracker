@@ -6,7 +6,7 @@
  * There is intentionally no time tracking here: no durations, timers or rest
  * periods. Progress is judged by sets, reps and weight.
  */
-import { and, asc, desc, eq, gte, inArray, lte, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db, DbOrTx } from "../db";
 import {
@@ -149,13 +149,14 @@ export async function listExercises(db: DbOrTx): Promise<(Exercise & { setCount:
   const [rows, usage] = await Promise.all([
     db.select().from(exercises).orderBy(asc(exercises.name)),
     db
-      .select({ exerciseId: workoutSets.exerciseId, localDate: workouts.localDate, completed: workoutSets.completed, kind: workoutSets.kind })
+      .select({ exerciseId: workoutSets.exerciseId, localDate: workouts.localDate, completed: workoutSets.completed, kind: workoutSets.kind, reps: workoutSets.reps, weightKg: workoutSets.weightKg })
       .from(workoutSets)
       .innerJoin(workouts, eq(workouts.id, workoutSets.workoutId)),
   ]);
   const stats = new Map<string, { setCount: number; lastDate: string | null }>();
   for (const u of usage) {
-    if (!u.completed || u.kind !== "working") continue;
+    // Same rule as statistics (isCountableSet): completed working sets with reps and a weight.
+    if (!u.completed || u.kind !== "working" || !u.reps || u.weightKg == null) continue;
     const s = stats.get(u.exerciseId) ?? { setCount: 0, lastDate: null };
     s.setCount += 1;
     if (!s.lastDate || u.localDate > s.lastDate) s.lastDate = u.localDate;
@@ -277,7 +278,8 @@ export async function getWorkout(db: DbOrTx, id: string, s: Settings): Promise<W
     let best: Workout | null = null;
     for (const c of candidates) {
       const cw = wById.get(c.workoutId);
-      if (!cw || cw.localDate > w.localDate) continue;
+      // Strictly earlier: an earlier day, or the same day but created before this workout.
+      if (!cw || cw.localDate > w.localDate || (cw.localDate === w.localDate && cw.createdAt >= w.createdAt)) continue;
       if (!best || cw.localDate > best.localDate || (cw.localDate === best.localDate && cw.createdAt > best.createdAt)) best = cw;
     }
     if (!best) return null;
@@ -579,7 +581,8 @@ export async function listWorkouts(db: DbOrTx, s: Settings, filter: { start?: Lo
 // Templates
 
 export async function listTemplates(db: DbOrTx) {
-  return db.select().from(workoutTemplates).orderBy(desc(workoutTemplates.lastUsedAt), asc(workoutTemplates.name));
+  // Recently used first; never-used templates after them (Postgres sorts NULLs first for DESC).
+  return db.select().from(workoutTemplates).orderBy(sql`${workoutTemplates.lastUsedAt} desc nulls last`, asc(workoutTemplates.name));
 }
 
 async function assertExercisesExist(db: DbOrTx, ids: string[]) {

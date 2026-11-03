@@ -125,3 +125,56 @@ test("running: log a run, mark rest days, streak and goal update", async ({ page
   const goals = await (await page.request.get("/api/user-goals")).json();
   expect(goals.goals.find((g: { metric: string }) => g.metric === "run_completed").current.status).toBe("met");
 });
+
+test("training: log a workout set by set, finish it, and see records and goals update", async ({ page }) => {
+  await login(page);
+  const logBench = async (weight: string, reps: string) => {
+    await page.goto("/training?start=1");
+    await page.getByRole("dialog").getByRole("button", { name: /Start empty workout/ }).click();
+    await page.waitForURL(/\/training\/workouts\//);
+    await page.getByRole("button", { name: /Add exercise/ }).first().click();
+    await page.getByLabel("Search exercises").fill("Barbell Bench");
+    await page.getByRole("dialog").getByRole("button", { name: /^\S*\s*Barbell Bench Press/ }).first().click();
+    await page.getByRole("dialog").getByRole("button", { name: /^Add( \d+)?$/ }).click();
+    await page.getByLabel(/Set 1 weight/).fill(weight);
+    await page.getByLabel(/Set 1 reps/).fill(reps);
+    await page.getByRole("button", { name: /Complete set 1/ }).click();
+    await expect(page.getByText("Saved").first()).toBeVisible();
+    await page.getByRole("button", { name: "Finish workout" }).click();
+    await expect(page.getByText("Workout complete")).toBeVisible();
+    return page.url().split("/").pop()!;
+  };
+  await logBench("185", "5");
+  const second = await logBench("195", "5");
+  await expect(page.getByText(/New record: Barbell Bench Press/).first()).toBeVisible();
+  const w = (await (await page.request.get(`/api/workouts/${second}`)).json()).workout;
+  expect(w.status).toBe("completed");
+  expect(w.exercises[0].sets[0].reps).toBe(5);
+  expect(Object.keys(w)).not.toContain("startedAt"); // no time tracking
+  const goals = await (await page.request.get("/api/user-goals")).json();
+  expect(goals.goals.find((g: { metric: string }) => g.metric === "workouts").current.value).toBeGreaterThanOrEqual(2);
+  await page.goto("/training/exercises/bi-barbell-bench-press");
+  await expect(page.getByRole("heading", { name: "Barbell Bench Press" }).first()).toBeVisible();
+});
+
+test("goals: create from a preset, see live progress, pause and delete", async ({ page }) => {
+  page.on("dialog", (d) => d.accept());
+  await login(page);
+  const day = await today(page);
+  await apiCall(page.request, "POST", "/api/vitals", { localDate: day, metric: "steps", value: 9000 });
+  await page.goto("/goals?new=1");
+  await page.getByRole("dialog").getByRole("button", { name: /8,000 steps daily/ }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Create goal" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const goals = await (await page.request.get("/api/user-goals")).json();
+  const steps = goals.goals.find((g: { metric: string }) => g.metric === "steps");
+  expect(steps.current).toMatchObject({ value: 9000, status: "met" });
+  await page.getByRole("button", { name: `Actions for ${steps.title}` }).click();
+  await page.getByRole("menuitem", { name: "Pause" }).click();
+  await expect.poll(async () => (await (await page.request.get(`/api/user-goals/${steps.id}`)).json()).goal.status).toBe("paused");
+  const paused = (await (await page.request.get(`/api/user-goals/${steps.id}`)).json()).goal;
+  expect(paused.targetValue).toBe(8000); // a status-only change keeps every other field
+  expect(paused.showOnDashboard).toBe(steps.showOnDashboard);
+  const del = await apiCall(page.request, "DELETE", `/api/user-goals/${steps.id}`);
+  expect(del.ok()).toBeTruthy();
+});

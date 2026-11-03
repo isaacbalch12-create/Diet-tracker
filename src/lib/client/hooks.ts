@@ -140,7 +140,7 @@ export function useWorkouts(qs = "") {
 }
 
 export function useWorkout(id: string) {
-  return useQuery({ queryKey: ["workout", id], queryFn: () => api.get<{ workout: WorkoutDetailJ }>(`/api/workouts/${id}`).then((r) => r.workout), refetchOnWindowFocus: false });
+  return useQuery({ queryKey: ["workout", id], queryFn: () => api.get<{ workout: WorkoutDetailJ }>(`/api/workouts/${encodeURIComponent(id)}`).then((r) => r.workout), refetchOnWindowFocus: false });
 }
 
 export function useExercises() {
