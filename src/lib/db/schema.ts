@@ -114,6 +114,8 @@ export const settings = pgTable(
     dashboard: jsonb("dashboard").$type<DashboardPrefs>().notNull().default(DEFAULT_DASHBOARD),
     /** Default goals and routines are created once; deleting them later is respected. */
     defaultsSeeded: boolean("defaults_seeded").notNull().default(false),
+    /** Version of the default routines last applied; bumped when the defaults change. */
+    defaultsVersion: integer("defaults_version").notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
