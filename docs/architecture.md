@@ -79,10 +79,21 @@ with client-generated ids, which makes saves idempotent.
 2. `POST /api/analyze` with a client-generated `requestId`. A retry with the
    same id returns the stored analysis — no second AI call, no duplicate.
 3. `runMealModel` (src/lib/ai/meal-analysis.ts) calls Claude with the photos and
-   text, a fixed system prompt, a `search_foods` tool and a JSON output schema.
-4. `resolveItems` deterministically maps refs to database rows, takes nutrient
-   values from the database, falls back to the AI estimate only for unmatched
-   items (labeled), and adds warnings for implausible values.
+   text, a fixed system prompt, a `search_foods` tool, a
+   `lookup_restaurant_nutrition` tool and a JSON output schema. The restaurant
+   tool (src/lib/ai/restaurant-lookup.ts) is a separate Claude request with
+   the server-side web search tool (direct calls, so result URLs stay visible).
+   It returns published per-serving values only when the cited page is one the
+   search returned and the values pass range and calorie-vs-macro checks. A
+   paused search turn (`pause_turn`) is resumed up to 3 times. It runs
+   separately so that the meal analysis keeps its strict JSON output, and a web
+   failure just means the item has no restaurant data.
+4. `resolveItems` deterministically maps refs to database rows (`F…`) or
+   verified restaurant facts (`R…`), takes nutrient values from them, falls
+   back to the AI estimate only for unmatched items (labeled), and adds
+   warnings for implausible values. Restaurant items are stored per 100 g,
+   derived from the per-serving values, so n servings total exactly n × the
+   published numbers.
 5. The draft is stored in `meal_analyses` and shown for review. Saving calls
    `POST /api/meals` with its own idempotency key.
 
@@ -109,6 +120,8 @@ Confirm.
 - AI unavailable / not configured / rate limited → typed, user-readable errors;
   manual logging keeps working.
 - USDA API unavailable → local results plus a notice.
+- Restaurant web lookup unavailable (web search not enabled, errors, nothing
+  found) → the model is told, and falls back to USDA matches or labeled estimates.
 - Health payloads: unusable items are ignored with reasons and recorded in the
   connection's sync log; an empty or invalid payload returns 422.
 - All mutations validate input with zod; totals and goal progress are

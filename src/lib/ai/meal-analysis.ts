@@ -1,8 +1,10 @@
 /**
  * AI meal interpretation. Claude's job is limited to *interpretation*: splitting a
  * description or photo into foods, estimating portions, and choosing the best
- * USDA database match (via the `search_foods` tool). Nutrient values for matched
- * foods come from the database, and all totals are computed deterministically
+ * source for each food — a USDA database match (via `search_foods`) or, for named
+ * restaurants and brands, their published nutrition found on the web (via
+ * `lookup_restaurant_nutrition`, verified in restaurant-lookup.ts). Nutrient
+ * values come from those sources, and all totals are computed deterministically
  * by the nutrition calculator — never taken from the model's arithmetic.
  */
 import { randomUUID } from "node:crypto";
@@ -17,6 +19,7 @@ import { calorieDisagreement } from "../nutrition/calc";
 import type { NutrientProfile } from "../nutrition/nutrients";
 import { env } from "../env";
 import { type AnthropicLike, fallbackParams, getAnthropic, toAiError } from "./client";
+import { lookupRestaurantNutrition, type RestaurantFact } from "./restaurant-lookup";
 
 type BetaMessageParam = Anthropic.Beta.BetaMessageParam;
 type BetaContentBlockParam = Anthropic.Beta.BetaContentBlockParam;
@@ -25,12 +28,13 @@ type BetaToolResultBlockParam = Anthropic.Beta.BetaToolResultBlockParam;
 export const SYSTEM_PROMPT = `You are the food-logging engine inside a personal nutrition tracker. You turn a person's meal description and/or meal photos into an itemized list of foods that the app will store and total.
 
 Division of labour:
-- You interpret: identify each food, estimate its amount in grams, and pick the closest entry from the USDA FoodData Central database using the search_foods tool.
-- The app computes nutrition: for any item matched to a database entry, the app uses the database's per-100 g values and does all arithmetic. Your own per-100 g estimate is used only when no database entry fits, and is labelled as an AI estimate in the app.
+- You interpret: identify each food, estimate its amount, and pick the best nutrition source — the closest entry from the USDA FoodData Central database (search_foods tool) or, for food from a named restaurant, chain or packaged brand, its published nutrition facts (lookup_restaurant_nutrition tool, when available).
+- The app computes nutrition: for any item matched to a database entry or a restaurant lookup, the app uses that source's values and does all arithmetic. Your own per-100 g estimate is used only when no source fits, and is labelled as an AI estimate in the app.
 
 How to work:
 1. Split the meal into individual foods and drinks. Keep a composite dish as one item when the database has a good as-eaten entry (e.g. "Pizza, cheese, thin crust", "Chicken burrito"); otherwise list its main components.
-2. Call search_foods once with a query for every item (batch all queries in one call). USDA descriptions are formal, e.g. "Egg, whole, fried with butter", "Bread, white, toasted", "Pork, cured, bacon, cooked", "Rice, white, cooked, no added fat". Prefer "Survey (FNDDS)" as-eaten entries that match the preparation. Search again with different wording if nothing fits. Never invent a food_ref; use only refs returned by the tool.
+2. Call search_foods once with a query for every item (batch all queries in one call). USDA descriptions are formal, e.g. "Egg, whole, fried with butter", "Bread, white, toasted", "Pork, cured, bacon, cooked", "Rice, white, cooked, no added fat". Prefer "Survey (FNDDS)" as-eaten entries that match the preparation. Search again with different wording if nothing fits. Never invent a food_ref; use only refs returned by the tools.
+2b. Restaurants and brands: when the person names a restaurant, chain or packaged brand (e.g. "Chipotle chicken bowl", "a Big Mac", "Starbucks grande latte", "Chobani vanilla yogurt"), call lookup_restaurant_nutrition for those items — published numbers beat generic database entries. Batch all of them in one call; you can call it in the same turn as search_foods. Include size and customizations in the item text. For an item it finds, cite its R ref as food_ref, use the menu serving as the unit (e.g. "burrito", "serving", "grande") with quantity = servings eaten, and set grams_per_unit to the lookup's serving_grams, or your estimate of one serving's weight when it has none. If it finds nothing, fall back to search_foods or your own estimate. Don't use it for generic or home-made food.
 3. Amounts: use the quantity the person stated. If none was stated, estimate a typical adult portion (or, for photos, estimate from plate size, utensils and food volume) and mark quantity_source "estimated". Express each item as quantity × unit, with grams_per_unit being the weight of one unit. When the matched entry lists a suitable household portion (e.g. "large = 50 g", "slice = 25 g"), use that portion name as the unit and its grams. For liquids, convert volume to grams (water-like drinks ≈ 1 g/ml).
 4. Hidden ingredients: include cooking fat, butter, dressings or sauces only when the description or photo gives real evidence (e.g. "fried", visible sheen, "with butter"). Mark such inferred items is_assumed = true with a short note. Don't add speculative items.
 5. Always fill estimate_per_100g with your best per-100 g estimate for the food as described (even when you also give a food_ref) — the app uses it as a plausibility check. Use null for nutrients you cannot estimate sensibly.
@@ -40,6 +44,32 @@ How to work:
 9. When revising a previous analysis using the person's answers, keep the items they did not question and adjust the rest.
 
 Your final message must be the JSON object only.`;
+
+export const RESTAURANT_TOOL: Anthropic.Beta.BetaTool = {
+  name: "lookup_restaurant_nutrition",
+  description:
+    "Look up published nutrition facts on the web for food from a named restaurant, chain or packaged brand. Prefers the restaurant's or brand's own nutrition information. Returns, per item, a ref (R1, R2, …) to cite as food_ref, the serving as published, the serving weight when published, per-serving calories/protein/carbs/fat and the source website — or found: false. Slower than search_foods; use it only for named restaurants and brands, and batch all items in one call.",
+  strict: true,
+  input_schema: {
+    type: "object",
+    properties: {
+      items: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            restaurant: { type: "string", description: "Restaurant, chain or brand, e.g. \"Chipotle\"" },
+            item: { type: "string", description: "Menu item with size and customizations, e.g. \"chicken burrito bowl with white rice, black beans, mild salsa, cheese\"" },
+          },
+          required: ["restaurant", "item"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["items"],
+    additionalProperties: false,
+  },
+};
 
 export const SEARCH_TOOL: Anthropic.Beta.BetaTool = {
   name: "search_foods",
@@ -165,10 +195,11 @@ export interface AnalyzeResult {
   usage: Record<string, number>;
 }
 
-/** Candidate registry: the model may only cite refs the tool actually returned. */
-class Candidates {
+/** Candidate registry: the model may only cite refs the tools actually returned. */
+export class Candidates {
   private byRef = new Map<string, FoodSearchResult>();
   private byId = new Map<string, string>();
+  private restaurants = new Map<string, RestaurantFact>();
   add(food: FoodSearchResult): string {
     const existing = this.byId.get(food.id);
     if (existing) return existing;
@@ -179,6 +210,14 @@ class Candidates {
   }
   get(ref: string | null): FoodSearchResult | undefined {
     return ref ? this.byRef.get(ref.trim().toUpperCase()) : undefined;
+  }
+  addRestaurant(fact: RestaurantFact): string {
+    const ref = `R${this.restaurants.size + 1}`;
+    this.restaurants.set(ref, fact);
+    return ref;
+  }
+  getRestaurant(ref: string | null): RestaurantFact | undefined {
+    return ref ? this.restaurants.get(ref.trim().toUpperCase()) : undefined;
   }
 }
 
@@ -212,6 +251,46 @@ async function runSearchTool(db: DbOrTx, input: unknown, cands: Candidates): Pro
   }
   if (apiNote) out._note = `Online USDA search unavailable (${apiNote}); results are from the local database only.`;
   return JSON.stringify(out);
+}
+
+function hostOf(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).host.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+async function runRestaurantTool(input: unknown, cands: Candidates, client: AnthropicLike, usage: Record<string, number>): Promise<string> {
+  const parsed = z.object({ items: z.array(z.object({ restaurant: z.string().min(1).max(200), item: z.string().min(1).max(300) })).min(1).max(10) }).safeParse(input);
+  if (!parsed.success) return JSON.stringify({ error: "items must be a non-empty array of {restaurant, item}" });
+  let facts: RestaurantFact[];
+  try {
+    const res = await lookupRestaurantNutrition(parsed.data.items, client);
+    facts = res.facts;
+    for (const [k, v] of Object.entries(res.usage)) usage[k] = (usage[k] ?? 0) + v;
+  } catch (err) {
+    const msg = err instanceof AppError ? err.message : "unknown error";
+    return JSON.stringify({ error: `Restaurant lookup unavailable (${msg.slice(0, 160)}). Use search_foods or your own estimate for these items.` });
+  }
+  return JSON.stringify(
+    facts.map((f) =>
+      f.found
+        ? {
+            ref: cands.addRestaurant(f),
+            found: true,
+            restaurant: f.restaurant,
+            item: f.item,
+            serving: f.serving,
+            serving_grams: f.servingGrams,
+            per_serving: { kcal: r1(f.perServing.calories), protein_g: r1(f.perServing.protein), carbs_g: r1(f.perServing.carbs), fat_g: r1(f.perServing.fat) },
+            source: hostOf(f.sourceUrl),
+            notes: f.notes,
+          }
+        : { query: `${f.query.restaurant} — ${f.query.item}`, found: false, notes: f.notes },
+    ),
+  );
 }
 
 function buildUserContent(input: AnalyzeInput): BetaContentBlockParam[] {
@@ -249,6 +328,7 @@ export async function runMealModel(db: DbOrTx, input: AnalyzeInput, client: Anth
   const cands = new Candidates();
   const messages: BetaMessageParam[] = [{ role: "user", content: buildUserContent(input) }];
   const usage: Record<string, number> = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
+  const tools = env.aiWebLookup ? [SEARCH_TOOL, RESTAURANT_TOOL] : [SEARCH_TOOL];
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const last = turn === MAX_TURNS - 1;
     let response: Anthropic.Beta.BetaMessage;
@@ -259,7 +339,7 @@ export async function runMealModel(db: DbOrTx, input: AnalyzeInput, client: Anth
         // Cache the stable prefix (system + tool + photos) across loop turns.
         cache_control: { type: "ephemeral" },
         system: SYSTEM_PROMPT,
-        tools: [SEARCH_TOOL],
+        tools,
         tool_choice: last ? { type: "none" } : { type: "auto" },
         output_config: { effort: "medium", format: { type: "json_schema", schema: OUTPUT_SCHEMA as unknown as Record<string, unknown> } },
         messages,
@@ -281,14 +361,14 @@ export async function runMealModel(db: DbOrTx, input: AnalyzeInput, client: Anth
     const toolUses = response.content.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === "tool_use");
     if (response.stop_reason === "tool_use" && toolUses.length > 0) {
       messages.push({ role: "assistant", content: response.content as BetaContentBlockParam[] });
-      const results: BetaToolResultBlockParam[] = [];
-      for (const tu of toolUses) {
-        if (tu.name !== "search_foods") {
-          results.push({ type: "tool_result", tool_use_id: tu.id, is_error: true, content: `Unknown tool ${tu.name}` });
-          continue;
-        }
-        results.push({ type: "tool_result", tool_use_id: tu.id, content: await runSearchTool(db, tu.input, cands) });
-      }
+      // Run the calls concurrently (a web lookup is slow); results go back together in one message.
+      const results: BetaToolResultBlockParam[] = await Promise.all(
+        toolUses.map(async (tu): Promise<BetaToolResultBlockParam> => {
+          if (tu.name === "search_foods") return { type: "tool_result", tool_use_id: tu.id, content: await runSearchTool(db, tu.input, cands) };
+          if (tu.name === "lookup_restaurant_nutrition" && env.aiWebLookup) return { type: "tool_result", tool_use_id: tu.id, content: await runRestaurantTool(tu.input, cands, client, usage) };
+          return { type: "tool_result", tool_use_id: tu.id, is_error: true, content: `Unknown tool ${tu.name}` };
+        }),
+      );
       messages.push({ role: "user", content: results });
       continue;
     }
@@ -320,10 +400,37 @@ function estimateProfile(e: AiItem["estimate_per_100g"]): NutrientProfile {
   return p;
 }
 
+const MASS_UNITS: Record<string, number> = { g: 1, gram: 1, grams: 1, oz: 28.349523125, ounce: 28.349523125, ounces: 28.349523125 };
+
+function multiplyProfile(p: NutrientProfile, factor: number): NutrientProfile {
+  const out: NutrientProfile = {};
+  for (const [k, v] of Object.entries(p)) if (typeof v === "number") out[k as keyof NutrientProfile] = v * factor;
+  return out;
+}
+
+/**
+ * Restaurant items are stored per 100 g like everything else, but derived from
+ * the published per-serving values so that n servings always total exactly n ×
+ * the published numbers, whatever the serving's (possibly estimated) weight.
+ */
+function restaurantAmounts(ai: AiItem, fact: RestaurantFact, quantity: number, gramsPerUnit: number, warnings: string[]) {
+  const massFactor = MASS_UNITS[ai.unit.trim().toLowerCase()];
+  if (massFactor === undefined) {
+    // Counted in servings: one unit = one published serving.
+    const g = fact.servingGrams ?? gramsPerUnit;
+    return { quantity, unit: ai.unit, gramsPerUnit: g, servingGrams: g };
+  }
+  const eatenGrams = quantity * gramsPerUnit;
+  if (fact.servingGrams) return { quantity: eatenGrams, unit: "g", gramsPerUnit: 1, servingGrams: fact.servingGrams };
+  warnings.push("The restaurant doesn't publish a serving weight, so this was counted as one serving — check the amount.");
+  return { quantity: 1, unit: "serving", gramsPerUnit: eatenGrams, servingGrams: eatenGrams };
+}
+
 /**
  * Deterministic resolution: map each AI item to stored nutrient data.
- * Matched items take per-100 g values from the database row; unmatched items
- * use the AI estimate and are labelled as such. Implausible numbers are flagged.
+ * Database matches take per-100 g values from the database row; restaurant
+ * matches take the verified published values; unmatched items use the AI
+ * estimate and are labelled as such. Implausible numbers are flagged.
  */
 export function resolveItems(items: AiItem[], cands: Candidates, foodsById: Map<string, Food>): DraftItem[] {
   return items.map((ai) => {
@@ -341,15 +448,31 @@ export function resolveItems(items: AiItem[], cands: Candidates, foodsById: Map<
     if (quantity * gramsPerUnit > 2500) warnings.push(`That is ${Math.round(quantity * gramsPerUnit)} g — unusually large; please check the amount.`);
 
     const estimate = estimateProfile(ai.estimate_per_100g);
-    const cand = cands.get(ai.food_ref);
+    const restaurant = cands.getRestaurant(ai.food_ref);
+    const cand = restaurant ? undefined : cands.get(ai.food_ref);
     const food = cand ? foodsById.get(cand.id) : undefined;
-    if (ai.food_ref && !cand) warnings.push("The AI cited a database entry that wasn't in its search results, so its own estimate is used.");
+    if (ai.food_ref && !cand && !restaurant) warnings.push("The AI cited a database entry that wasn't in its search results, so its own estimate is used.");
 
+    let unit = ai.unit;
     let nutrientsPer100g: NutrientProfile;
     let nutrientSource: DraftItem["nutrientSource"];
     let sourceRef: DraftItem["sourceRef"] = null;
     let portions: Portion[] = [];
-    if (food) {
+    if (restaurant) {
+      const amounts = restaurantAmounts(ai, restaurant, quantity, gramsPerUnit, warnings);
+      ({ quantity, unit, gramsPerUnit } = amounts);
+      nutrientsPer100g = multiplyProfile(restaurant.perServing, 100 / amounts.servingGrams);
+      nutrientSource = "restaurant";
+      sourceRef = { provider: "restaurant", description: `${restaurant.restaurant} — ${restaurant.item} (${restaurant.serving})`.slice(0, 300), url: restaurant.sourceUrl ?? undefined };
+      portions = [{ label: restaurant.serving.slice(0, 120) || "serving", grams: amounts.servingGrams }];
+      warnings.push(...restaurant.warnings);
+      if (restaurant.notes) warnings.push(`Restaurant data: ${restaurant.notes}`.slice(0, 500));
+      // Only meaningful when the serving weight is published (otherwise per-100 g is derived from a guess).
+      const ratio = restaurant.servingGrams ? calorieDisagreement(nutrientsPer100g.calories, estimate.calories) : null;
+      if (ratio !== null && ratio > 2.5) {
+        warnings.push(`The published values for "${restaurant.item}" differ a lot from the AI's estimate. Check that it's the right menu item.`);
+      }
+    } else if (food) {
       nutrientsPer100g = food.nutrientsPer100g;
       nutrientSource = "database";
       sourceRef = { provider: food.source, fdcId: food.externalId ?? undefined, dataType: food.dataType, description: food.description };
@@ -362,8 +485,8 @@ export function resolveItems(items: AiItem[], cands: Candidates, foodsById: Map<
       nutrientsPer100g = estimate;
       nutrientSource = "ai_estimate";
     }
-    if (!portions.some((p) => p.label.toLowerCase() === ai.unit.toLowerCase())) {
-      portions.unshift({ label: ai.unit, grams: gramsPerUnit });
+    if (!portions.some((p) => p.label.toLowerCase() === unit.toLowerCase())) {
+      portions.unshift({ label: unit, grams: gramsPerUnit });
     }
     const known: Partial<Record<string, number>> = {};
     for (const [k, v] of Object.entries(nutrientsPer100g)) if (typeof v === "number") known[k] = v;
@@ -371,7 +494,7 @@ export function resolveItems(items: AiItem[], cands: Candidates, foodsById: Map<
       key: randomUUID(),
       name: ai.name,
       quantity,
-      unit: ai.unit,
+      unit,
       gramsPerUnit,
       nutrientsPer100g: known,
       nutrientSource,
@@ -383,7 +506,7 @@ export function resolveItems(items: AiItem[], cands: Candidates, foodsById: Map<
       cookingMethod: ai.cooking_method,
       isAssumed: ai.is_assumed,
       notes: ai.notes,
-      warnings,
+      warnings: warnings.slice(0, 10),
       portions: portions.slice(0, 12),
       aiOriginal: ai as unknown as Record<string, unknown>,
     };

@@ -4,7 +4,7 @@ import { AlertTriangle, ChevronDown, ChevronUp, ExternalLink, Plus, Replace, Tra
 import { useState } from "react";
 import { itemFromFood, rematchItem, unitOptions, withNutrientTotal } from "@/lib/client/items";
 import type { DraftItem } from "@/lib/drafts";
-import { fdcUrl, fmtQty } from "@/lib/format";
+import { fdcUrl, fmtQty, safeWebUrl } from "@/lib/format";
 import { itemGrams, itemNutrients, itemsTotals } from "@/lib/nutrition/calc";
 import { NUTRIENTS, type NutrientKey } from "@/lib/nutrition/nutrients";
 import { FoodPicker } from "./food-search";
@@ -44,7 +44,7 @@ function ItemRow({ item, onChange, onRemove, readOnly }: { item: DraftItem; onCh
   const grams = itemGrams(item);
   const n = itemNutrients(item);
   const units = unitOptions(item);
-  const link = item.sourceRef?.provider === "usda" ? fdcUrl(item.sourceRef.fdcId) : null;
+  const link = item.sourceRef?.provider === "usda" ? fdcUrl(item.sourceRef.fdcId) : item.sourceRef?.provider === "restaurant" ? safeWebUrl(item.sourceRef.url) : null;
   const ai = item.aiOriginal as { quantity?: number; unit?: string; grams_per_unit?: number } | null;
 
   return (
@@ -134,10 +134,10 @@ function ItemRow({ item, onChange, onRemove, readOnly }: { item: DraftItem; onCh
           <div className="mb-3 flex flex-col gap-1 text-xs text-fg-2">
             {item.sourceRef ? (
               <span>
-                Matched to: <span className="font-medium text-fg">{item.sourceRef.description}</span>
+                {item.sourceRef.provider === "restaurant" ? "Published values for" : "Matched to"}: <span className="font-medium text-fg">{item.sourceRef.description}</span>
                 {link && (
-                  <a href={link} target="_blank" rel="noreferrer" className="ml-1 inline-flex items-center gap-0.5 text-accent">
-                    USDA #{item.sourceRef.fdcId} <ExternalLink className="size-3" />
+                  <a href={link} target="_blank" rel="noopener noreferrer" className="ml-1 inline-flex items-center gap-0.5 text-accent">
+                    {item.sourceRef.provider === "restaurant" ? new URL(link).host.replace(/^www\./, "") : `USDA #${item.sourceRef.fdcId}`} <ExternalLink className="size-3" />
                   </a>
                 )}
               </span>

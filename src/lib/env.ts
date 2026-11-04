@@ -35,6 +35,10 @@ export const env = {
   get anthropicFallbacks() {
     return str("ANTHROPIC_FALLBACKS") !== "off";
   },
+  /** Restaurant/brand nutrition lookups via Claude's web search (on by default; "off" disables). */
+  get aiWebLookup() {
+    return str("AI_WEB_LOOKUP") !== "off";
+  },
   get fdcApiKey() {
     return str("FDC_API_KEY") ?? "DEMO_KEY";
   },
