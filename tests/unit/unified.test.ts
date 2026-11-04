@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createMemoryDb, type Db } from "@/lib/db";
-import type { Settings } from "@/lib/db/schema";
+import { mobilityRoutines, routineActivities, settings as settingsTable, type Settings } from "@/lib/db/schema";
 import { AppError } from "@/lib/errors";
 import { createMeal } from "@/lib/services/meals";
 import { getSettings, setGoals, updateSettings } from "@/lib/services/settings";
@@ -24,7 +24,7 @@ import {
 import { importLiftlog } from "@/lib/services/liftlog-import";
 import { createRun, dayOffSchema, runInputSchema, runningOverview, setDayOff } from "@/lib/services/running";
 import { authenticateIngest, connectionInputSchema, createConnection, healthOverview, ingestHealth, revokeConnection, saveManualHealth } from "@/lib/services/health";
-import { ensureDefaults } from "@/lib/services/defaults";
+import { DAILY_MOBILITY, DEFAULTS_VERSION, ensureDefaults } from "@/lib/services/defaults";
 import { applyRoutineTemplate, getRoutineDay, logActivity, routineStats, saveJournal, saveRoutineTemplate, journalInputSchema, createActivity, activityInputSchema } from "@/lib/services/routines";
 import { createGoal, goalInputSchema, goalsWithProgress, saveCheckin, updateGoal } from "@/lib/services/goals";
 import { addWater } from "@/lib/services/water";
@@ -283,17 +283,24 @@ describe("routines and journal", () => {
     expect(await ensureDefaults(db, s, TODAY)).toBe(true);
     expect(await ensureDefaults(db, await getSettings(db), TODAY)).toBe(false);
     const morning = await getRoutineDay(db, "morning", TODAY);
-    expect(morning.activities.map((a) => a.kind)).toEqual(["mobility", "reading", "journal"]);
-    expect(morning.activities[0].mobility?.items.length).toBeGreaterThan(0);
+    expect(morning.activities.map((a) => a.kind)).toEqual(["mobility", "reading", "journal", "checklist"]);
+    expect(morning.activities[3]).toMatchObject({ title: "Hygiene", required: true });
+    expect(morning.activities[0].mobility?.items.map((i) => i.name)).toEqual(DAILY_MOBILITY.map((i) => i.name));
+    expect(morning.activities[0].mobility?.items.find((i) => i.name === "Pigeon Stretch")).toMatchObject({ perSide: true, targetNote: "45 seconds" });
     const night = await getRoutineDay(db, "night", TODAY);
+    expect(night.activities.map((a) => a.title)).toContain("Hygiene");
+    // Morning and night share one mobility routine.
+    expect(night.activities[0].mobility?.id).toBe(morning.activities[0].mobility?.id);
     expect(night.activities[2].config.prompts?.map((p) => p.text)).toContain("What went well today?");
-    const [mob, reading] = morning.activities;
+    expect((await getSettings(db)).defaultsVersion).toBe(DEFAULTS_VERSION);
+    const [mob, reading, , hygiene] = morning.activities;
+    await logActivity(db, { localDate: TODAY, activityId: hygiene.id, completed: true }, TODAY);
     await logActivity(db, { localDate: TODAY, activityId: mob.id, completed: true }, TODAY);
     await logActivity(db, { localDate: TODAY, activityId: reading.id, completed: false, value: 12, details: { title: "Meditations" } }, TODAY);
     // Journaling ticks off the journal activity automatically.
     await saveJournal(db, journalInputSchema.parse({ localDate: TODAY, slot: "morning", answers: [{ promptId: "p", prompt: "Q", answer: "Grateful for coffee" }] }), TODAY);
     const after = await getRoutineDay(db, "morning", TODAY);
-    expect(after.progress).toMatchObject({ required: 3, done: 3, complete: true });
+    expect(after.progress).toMatchObject({ required: 4, done: 4, complete: true });
     expect((await getRoutineDay(db, "night", TODAY)).progress.done).toBe(0);
   });
 
@@ -306,7 +313,46 @@ describe("routines and journal", () => {
     await applyRoutineTemplate(db, t.id, TODAY);
     const stats = await routineStats(db, { start: "2026-10-30", end: TODAY }, 1, TODAY);
     expect(stats.days.find((d) => d.date === "2026-10-30")?.night.complete).toBe(true);
-    expect((await getRoutineDay(db, "night", TODAY)).activities).toHaveLength(3);
+    expect((await getRoutineDay(db, "night", TODAY)).activities).toHaveLength(4);
+  });
+
+  it("upgrades an account seeded with the old defaults once, without touching history or custom choices", async () => {
+    const OLD = "2026-10-20";
+    const [morningMob, nightMob, custom] = await db
+      .insert(mobilityRoutines)
+      .values([
+        { name: "Morning mobility", slot: "morning", items: [] },
+        { name: "Evening wind-down stretches", slot: "night", items: [] },
+        { name: "My own flow", slot: null, items: [] },
+      ])
+      .returning();
+    const acts = await db
+      .insert(routineActivities)
+      .values([
+        { slot: "morning", position: 0, title: "Stretching & mobility", kind: "mobility", config: { mobilityRoutineId: morningMob.id }, activeFrom: OLD },
+        { slot: "morning", position: 1, title: "Reading", kind: "reading", config: {}, activeFrom: OLD },
+        { slot: "night", position: 0, title: "Stretching & mobility", kind: "mobility", config: { mobilityRoutineId: nightMob.id }, activeFrom: OLD },
+        { slot: "night", position: 1, title: "Yoga", kind: "mobility", config: { mobilityRoutineId: custom.id }, activeFrom: OLD },
+        { slot: "night", position: 2, title: "hygiene", kind: "checklist", config: {}, activeFrom: OLD },
+      ])
+      .returning();
+    for (const a of acts.filter((x) => x.slot === "morning")) await logActivity(db, { localDate: "2026-11-01", activityId: a.id, completed: true }, TODAY);
+    await db.update(settingsTable).set({ defaultsSeeded: true, defaultsVersion: 0 });
+
+    expect(await ensureDefaults(db, await getSettings(db), TODAY)).toBe(true);
+    expect(await ensureDefaults(db, await getSettings(db), TODAY)).toBe(false); // runs once
+
+    const morning = await getRoutineDay(db, "morning", TODAY);
+    expect(morning.activities.map((a) => a.title)).toEqual(["Stretching & mobility", "Reading", "Hygiene"]);
+    expect(morning.activities[0].mobility?.name).toBe("Daily mobility");
+    expect(morning.activities[0].mobility?.items).toHaveLength(7);
+    const night = await getRoutineDay(db, "night", TODAY);
+    expect(night.activities.map((a) => a.title)).toEqual(["Stretching & mobility", "Yoga", "hygiene"]); // already had hygiene
+    expect(night.activities[0].mobility?.id).toBe(morning.activities[0].mobility?.id);
+    expect(night.activities[1].mobility?.id).toBe(custom.id); // user's own routine kept
+    // Yesterday was judged against yesterday's activities; old routines stay in the library.
+    expect((await getRoutineDay(db, "morning", "2026-11-01")).progress).toMatchObject({ required: 2, done: 2, complete: true });
+    expect((await db.select().from(mobilityRoutines)).map((m) => m.name).sort()).toEqual(["Daily mobility", "Evening wind-down stretches", "Morning mobility", "My own flow"]);
   });
 });
 
@@ -383,7 +429,7 @@ describe("today and insights", () => {
     expect(t.nutrition.totals.values.calories).toBeCloseTo(304, 6);
     expect(t.running.status?.status).toBe("done");
     expect(t.health.sleep?.value).toBe(455);
-    expect(t.routines.morning.activities.length).toBe(3);
+    expect(t.routines.morning.activities.length).toBe(4);
     expect(t.goals.some((g) => g.metric === "run_completed")).toBe(true);
     expect(t.timeline.map((x) => x.kind)).toEqual(expect.arrayContaining(["weight", "meal", "run"]));
     const sorted = [...t.timeline].sort((a, b) => a.at.localeCompare(b.at));
@@ -446,7 +492,7 @@ describe("assistant tools across areas", () => {
     expect(health.sleep.average).toBe(7);
     expect(health.sleep_score).toMatch(/no sleep score/);
     const routines = (await runAssistantTool(ctx, "get_routines_summary", range)) as { morning: { activities: unknown[] } };
-    expect(routines.morning.activities.length).toBe(3);
+    expect(routines.morning.activities.length).toBe(4);
     const goals = (await runAssistantTool(ctx, "get_goals_progress", {})) as { goal: string }[];
     expect(goals.some((g) => g.goal === "Run every day")).toBe(true);
     const insights = (await runAssistantTool(ctx, "get_insights", { days: 30 })) as { summaries: unknown };

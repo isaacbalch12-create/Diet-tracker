@@ -15,12 +15,12 @@ into one product with shared goals, dashboard, statistics and navigation.
 | --- | --- |
 | **Today** | Customizable dashboard: weight, calories & macros, water, workout, run, steps, sleep, morning/nightly routine progress, goal progress, insights and a chronological activity log. Reorder or hide sections and choose the overview metrics. |
 | **Goals** | Any number of goals per area — nutrition (any nutrient, water), body (target weight, weekly rate, weigh-in consistency), exercise (workouts/week, estimated 1RM, weight × reps, sets/reps/volume, PRs), running (run every day, distance, run days, consistency), health (steps, sleep, sleep score when provided, resting HR, HRV), routines (completion, reading, journaling, mobility) and custom habits. Daily, weekly, monthly or custom periods; start/end dates; pause/resume; streaks; full history. Progress is computed live from your records, so every log updates every goal. Target changes apply from today — history keeps the targets it had. |
-| **Nutrition** | Everything from the Diet Tracker: describe a meal or snap a photo; Claude identifies foods and portions, USDA data supplies nutrients, totals are computed deterministically; AI estimates are labeled and editable; daily dashboard with remaining calories/macros; history; analytics. |
+| **Nutrition** | Everything from the Diet Tracker: describe a meal or snap a photo; Claude identifies foods and portions, USDA data — or, for named restaurants and brands, their published nutrition found on the web — supplies nutrients, totals are computed deterministically; AI estimates are labeled and editable; daily dashboard with remaining calories/macros; history; analytics. |
 | **Weight** | Morning and night weigh-ins, daily average, 7-day rolling average, trend, fluctuation, weekly/monthly averages. |
 | **Training** | Everything from LiftLog except time tracking: fast set logging (weight, reps, optional RPE, warm-ups, notes) with last session's numbers beside every set, templates, repeat a workout, log past workouts, 100+ built-in exercises plus custom ones, per-exercise history and charts, estimated 1RM trends and plateau checks, rep records, personal records, weekly/monthly volume and muscle-group breakdowns. **No timers, durations or rest timers.** |
 | **Running** | Daily running focused on consistency and distance (no pace or duration): log completion, distance, type, effort and notes; planned rest and recovery days never break a streak; streaks, consistency %, weekly/monthly distance, progression charts, records, recovery cautions. |
 | **Steps & sleep** | Apple Health / Health Connect data via a token-protected sync endpoint (iOS Shortcut, Health Auto Export, or an Android exporter) plus manual entry: steps, sleep duration and stages, sleep score only when a connected source supplies one, resting HR, HRV, active energy — with source and last-sync time on every value. See [docs/health-integration.md](docs/health-integration.md). |
-| **Routines & journal** | Separate morning and nightly routines (defaults: stretching & mobility, reading, journaling), fully editable: add/remove/reorder activities, required vs optional, numeric targets, mobility routine library, journal prompts, routine templates. Daily checklist, completion %, streaks, per-activity consistency. Journal with prompts, free writing and browsing by date. |
+| **Routines & journal** | Separate morning and nightly routines (defaults: a shared 7-stretch mobility routine, reading, journaling, hygiene), fully editable: add/remove/reorder activities, required vs optional, numeric targets, mobility routine library, journal prompts, routine templates. Daily checklist, completion %, streaks, per-activity consistency. Journal with prompts, free writing and browsing by date. |
 | **Analytics** | Tabs for Overview (labeled insights + daily/weekly/monthly summaries), Nutrition & body, Strength, Running, Steps & sleep and Routines, with 7D/30D/90D/6M/1Y/All filters. |
 | **AI assistant** | Answers questions across all areas using read-only tools over your data; proposes changes you confirm. |
 
@@ -84,6 +84,7 @@ it. It never touches your real data.
 | `ANTHROPIC_API_KEY` | for AI | Enables text/photo meal analysis and the assistant. Get one at [console.anthropic.com](https://console.anthropic.com/). |
 | `ANTHROPIC_MODEL` | no | Defaults to `claude-opus-5-5`. |
 | `ANTHROPIC_FALLBACKS` | no | Server-side refusal fallback is on by default; set `off` if a gateway rejects it. |
+| `AI_WEB_LOOKUP` | no | Restaurant/brand nutrition lookups with Claude's web search (on by default; needs web search allowed in the Claude Console, $10 per 1,000 searches). Set `off` to use only the USDA database. |
 | `FDC_API_KEY` | recommended | Free [USDA API key](https://fdc.nal.usda.gov/api-key-signup) for online lookups (branded products, foods not in the local copy). Without it the shared, heavily rate-limited `DEMO_KEY` is used. |
 | `DATABASE_URL` | hosted deploys | PostgreSQL connection string. Empty = embedded database in `PGLITE_DIR`. On Netlify, `NETLIFY_DB_URL` (set automatically by Netlify Database) is used instead. |
 | `PGLITE_DIR` | no | Embedded database folder (default `./data/pglite`). |
@@ -152,7 +153,18 @@ How the AI is used — and what it is *not* trusted with:
   the matched database rows and computes all totals itself. Only foods without
   a database match use the model's per-100 g estimate, and they are labelled
   **AI estimate**. Implausible matches (database vs. estimate differ >2.5×) are
-  flagged for review. When portions, oils or ingredients materially change the
+  flagged for review.
+- **Restaurants and brands:** when you name one ("Chipotle chicken burrito",
+  "Starbucks grande latte"), Claude calls a `lookup_restaurant_nutrition` tool.
+  That runs a separate Claude request with Anthropic's web search tool, which
+  looks for the published numbers, preferring the restaurant's own nutrition
+  page. The server only uses a result if the cited page was in the search
+  results, every value is in a plausible range, and calories are checked
+  against the macros. Such foods are labelled **Restaurant data** and link to
+  the source page. Totals are always n × the published per-serving values. If
+  nothing trustworthy is found, the food falls back to USDA or an AI estimate.
+  Web search costs $10 per 1,000 searches, and an organization admin has to
+  allow it in the Claude Console. Set `AI_WEB_LOOKUP=off` to turn it off. When portions, oils or ingredients materially change the
   estimate, Claude asks up to 3 short clarifying questions.
 - **Nothing is saved until you confirm** the draft (unless you tick *Quick
   save*). Requests carry an idempotency key, so a retried request returns the
@@ -290,7 +302,7 @@ flow.
 - **Nutrition tracking:** calories, protein, carbs, fat plus saturated/trans
   fat, fiber, sugar, sodium, cholesterol, potassium, calcium, iron, magnesium,
   zinc and vitamins A, C, D, B12 and folate. Each food is labelled
-  *Database*, *AI estimate* or *Manual*, keeps its USDA reference, the original
+  *Database*, *Restaurant data*, *AI estimate* or *Manual*, keeps its USDA or restaurant source, the original
   AI estimate, confidence and assumptions.
 - **Dashboard:** totals vs. goals with remaining amounts, macro progress,
   weigh-ins, chronological meal timeline, biggest calorie/protein contributors,

@@ -5,6 +5,11 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AnthropicLike } from "@/lib/ai/client";
+import { Candidates, resolveItems } from "@/lib/ai/meal-analysis";
+import { lookupRestaurantNutrition } from "@/lib/ai/restaurant-lookup";
+import { itemNutrients } from "@/lib/nutrition/calc";
+import { createMeal } from "@/lib/services/meals";
+import { createMealSchema } from "@/lib/validation";
 import { createMemoryDb, type Db } from "@/lib/db";
 import type { Settings } from "@/lib/db/schema";
 import { AppError } from "@/lib/errors";
@@ -162,5 +167,144 @@ describe("AI meal analysis pipeline", () => {
     expect(prompt).toContain("Regular or diet?");
     expect(prompt).toContain("Diet");
     expect((await getAnalysis(db, analysis.id)).draft!.questions).toHaveLength(0);
+  });
+});
+
+describe("restaurant nutrition lookup", () => {
+  const lookupCall = (items: { restaurant: string; item: string }[], id = "tu_r"): Resp => ({
+    stop_reason: "tool_use",
+    content: [{ type: "tool_use", id, name: "lookup_restaurant_nutrition", input: { items } }],
+  });
+  const searchResults = (urls: { url: string; title: string }[]) => ({
+    type: "web_search_tool_result",
+    tool_use_id: "srvtoolu_1",
+    content: urls.map((u) => ({ type: "web_search_result", url: u.url, title: u.title, encrypted_content: "enc", page_age: null })),
+  });
+  const lookupReply = (results: Record<string, unknown>[], urls = [{ url: "https://www.chipotle.com/nutrition-calculator", title: "Chipotle Nutrition" }]): Resp => ({
+    stop_reason: "end_turn",
+    content: [
+      { type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: { query: "chipotle nutrition" } },
+      searchResults(urls),
+      // Web search answers come back split into cited text blocks; the app joins them.
+      { type: "text", text: '```json\n{"results":' },
+      { type: "text", text: `${JSON.stringify(results)}}\n\`\`\``, citations: [{ type: "web_search_result_location", url: urls[0].url, title: urls[0].title, cited_text: "…", encrypted_index: "x" }] },
+    ],
+  });
+  const burrito = {
+    index: 0,
+    found: true,
+    restaurant: "Chipotle",
+    item: "Chicken Burrito",
+    serving: "1 burrito",
+    serving_grams: null,
+    calories: 1055,
+    protein_g: 58,
+    carbs_g: 115,
+    fat_g: 39,
+    fiber_g: 15,
+    sugar_g: null,
+    saturated_fat_g: null,
+    sodium_mg: 2380,
+    source_url: "https://chipotle.com/nutrition-calculator/",
+    notes: null,
+  };
+
+  it("uses verified published values so totals match the restaurant's numbers", async () => {
+    const { client, calls } = scripted([
+      lookupCall([{ restaurant: "Chipotle", item: "chicken burrito" }]),
+      lookupReply([burrito]),
+      final([item({ name: "Chipotle chicken burrito", quantity: 1, unit: "burrito", grams_per_unit: 550, food_ref: "R1", estimate_per_100g: { calories: 190, protein: 10, carbs: 21, fat: 7, fiber: null, sugar: null, saturated_fat: null, sodium_mg: null } })]),
+    ]);
+    const { analysis } = await startAnalysis(db, { requestId: "req-rrrrrrr1", text: "chipotle chicken burrito", imageIds: [] }, s, client);
+    const [b] = analysis.draft!.items;
+    expect(b.nutrientSource).toBe("restaurant");
+    expect(b.sourceRef).toMatchObject({ provider: "restaurant", url: "https://www.chipotle.com/nutrition-calculator" });
+    expect(b.sourceRef!.description).toContain("Chicken Burrito");
+    const n = itemNutrients(b);
+    expect(n.calories).toBeCloseTo(1055, 6);
+    expect(n.protein).toBeCloseTo(58, 6);
+    expect(n.sodium).toBeCloseTo(2380, 6);
+
+    // The lookup is its own request: web search only (direct calls), plain text output, no JSON schema.
+    const lookup = calls[1] as { tools: { type: string; allowed_callers?: string[]; max_uses?: number }[]; output_config: { format?: unknown } };
+    expect(lookup.tools).toEqual([expect.objectContaining({ type: "web_search_20260209", name: "web_search", allowed_callers: ["direct"] })]);
+    expect(lookup.output_config.format).toBeUndefined();
+    // The main request offers the lookup tool, and gets a compact result back.
+    expect((calls[0].tools as { name: string }[]).map((t) => t.name)).toEqual(["search_foods", "lookup_restaurant_nutrition"]);
+    const toolResult = (calls[2].messages as { content: { content?: string }[] }[]).at(-1)!.content[0].content!;
+    expect(toolResult).toContain('"ref":"R1"');
+    expect(toolResult).toContain('"source":"chipotle.com"');
+
+    // Two burritos are exactly twice the published numbers.
+    expect(itemNutrients({ ...b, quantity: 2 }).calories).toBeCloseTo(2110, 6);
+    // The user can save the draft as-is; the source survives the round trip.
+    const { meal } = await createMeal(db, createMealSchema.parse({ eatenAt: "2026-10-26T18:00:00Z", category: "Dinner", title: "Burrito", source: "text", analysisId: analysis.id, items: [b] }), s);
+    expect(meal.items[0]).toMatchObject({ nutrientSource: "restaurant", sourceRef: { provider: "restaurant", url: "https://www.chipotle.com/nutrition-calculator" } });
+    expect(() => createMealSchema.parse({ eatenAt: "2026-10-26T18:00:00Z", category: "Dinner", title: "x", source: "manual", items: [{ ...b, sourceRef: { ...b.sourceRef, url: "javascript:alert(1)" } }] })).toThrow();
+  });
+
+  it("rejects numbers whose source page wasn't in the search results, and implausible values", async () => {
+    const facts = await lookupRestaurantNutrition(
+      [
+        { restaurant: "Chipotle", item: "chicken burrito" },
+        { restaurant: "Chipotle", item: "chips" },
+        { restaurant: "Nowhere Diner", item: "pie" },
+      ],
+      scripted([
+        lookupReply([
+          { ...burrito, source_url: "https://made-up.example.com/burrito" },
+          { ...burrito, index: 1, item: "Chips", calories: 99_999, source_url: "https://www.chipotle.com/nutrition-calculator" },
+          { index: 2, found: false, notes: "No published nutrition found." },
+        ]),
+      ]).client,
+    );
+    expect(facts.facts.map((f) => f.found)).toEqual([false, false, false]);
+    expect(facts.facts[0].notes).toMatch(/without a source page/);
+    expect(facts.facts[1].notes).toMatch(/implausible/);
+    expect(facts.facts[2].notes).toMatch(/No published/);
+  });
+
+  it("resumes a paused search turn and flags calories that don't match the macros", async () => {
+    const paused: Resp = { stop_reason: "pause_turn", content: [{ type: "server_tool_use", id: "srvtoolu_0", name: "web_search", input: { query: "q" } }] };
+    const { client, calls } = scripted([paused, lookupReply([{ ...burrito, calories: 400 }])]);
+    const { facts } = await lookupRestaurantNutrition([{ restaurant: "Chipotle", item: "chicken burrito" }], client);
+    expect(calls).toHaveLength(2);
+    // The paused assistant turn is sent back unchanged, with no extra user message.
+    const resumed = calls[1].messages as { role: string }[];
+    expect(resumed.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(facts[0].found).toBe(true);
+    expect(facts[0].warnings.join(" ")).toMatch(/don't match the macros/);
+  });
+
+  it("falls back cleanly when the lookup fails or finds nothing", async () => {
+    const failing = {
+      beta: {
+        messages: {
+          create: (() => {
+            let n = 0;
+            return async () => {
+              n += 1;
+              if (n === 2) throw new AppError(503, "ai_unavailable", "web search is disabled for this organization");
+              return n === 1
+                ? { ...lookupCall([{ restaurant: "Chipotle", item: "bowl" }]), usage: { input_tokens: 1, output_tokens: 1 } }
+                : { ...final([item({ name: "Burrito bowl", food_ref: "R1" })]), usage: { input_tokens: 1, output_tokens: 1 } };
+            };
+          })(),
+        },
+      },
+    } as unknown as AnthropicLike;
+    const { analysis } = await startAnalysis(db, { requestId: "req-rrrrrrr2", text: "chipotle bowl", imageIds: [] }, s, failing);
+    const [bowl] = analysis.draft!.items;
+    // R1 was never issued, so the item falls back to the AI estimate and says so.
+    expect(bowl.nutrientSource).toBe("ai_estimate");
+    expect(bowl.warnings.join(" ")).toMatch(/wasn't in its search results/);
+  });
+
+  it("converts gram amounts using the published serving weight", () => {
+    const cands = new Candidates();
+    const ref = cands.addRestaurant({ query: { restaurant: "Chobani", item: "vanilla" }, found: true, restaurant: "Chobani", item: "Vanilla Greek Yogurt", serving: "1 cup", servingGrams: 150, perServing: { calories: 120, protein: 12, carbs: 15, fat: 0 }, sourceUrl: "https://www.chobani.com/products/vanilla", sourceTitle: null, notes: null, warnings: [] });
+    const [y] = resolveItems([item({ name: "Yogurt", quantity: 300, unit: "g", grams_per_unit: 1, food_ref: ref }) as never], cands, new Map());
+    expect(y).toMatchObject({ unit: "g", quantity: 300, gramsPerUnit: 1, nutrientSource: "restaurant" });
+    expect(itemNutrients(y).calories).toBeCloseTo(240, 6);
   });
 });

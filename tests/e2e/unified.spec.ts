@@ -87,13 +87,13 @@ test("dashboard: default routines tick off from Today and sections can be hidden
   await page.goto("/");
   const routines = page.getByRole("region", { name: "Routines" });
   await expect(routines.getByText("Stretching & mobility").first()).toBeVisible();
-  await expect(routines.getByText("0/3 required").first()).toBeVisible();
+  await expect(routines.getByText("0/4 required").first()).toBeVisible();
   await routines.getByRole("checkbox", { name: /Stretching & mobility not done/ }).first().click();
-  await expect(routines.getByText("1/3 required").first()).toBeVisible();
+  await expect(routines.getByText("1/4 required").first()).toBeVisible();
   // Routine goals update from the same log.
   const goals = await (await page.request.get("/api/user-goals")).json();
   const morning = goals.goals.find((g: { metric: string; params: { slot?: string } }) => g.metric === "routine_completion" && g.params.slot === "morning");
-  expect(morning.current.value).toBeCloseTo(1 / 3, 5);
+  expect(morning.current.value).toBeCloseTo(1 / 4, 5);
 
   await page.getByRole("button", { name: "Customize dashboard" }).click();
   const dlg = page.getByRole("dialog");

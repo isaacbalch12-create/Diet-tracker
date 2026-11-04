@@ -15,6 +15,13 @@
       "when": 1793662628694,
       "tag": "0001_unified_tracker",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793755398647,
+      "tag": "0002_routine_defaults_v2",
+      "breakpoints": true
     }
   ]
 }

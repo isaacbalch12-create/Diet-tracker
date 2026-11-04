@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Database, Pencil, Sparkles } from "lucide-react";
+import { AlertTriangle, Database, Pencil, Sparkles, Store } from "lucide-react";
 import type { ReactNode } from "react";
 import { evaluateGoal } from "@/lib/nutrition/goals";
 import { NUTRIENTS, NUTRIENT_BY_KEY, type NutrientKey, type NutrientProfile } from "@/lib/nutrition/nutrients";
@@ -14,11 +14,17 @@ export const MACRO_COLORS: Record<"calories" | "protein" | "carbs" | "fat", stri
   fat: "var(--series-3)",
 };
 
-export function SourceBadge({ source }: { source: "database" | "ai_estimate" | "manual" }) {
+export function SourceBadge({ source }: { source: "database" | "restaurant" | "ai_estimate" | "manual" }) {
   if (source === "database")
     return (
       <Badge tone="accent" title="Nutrient values from the USDA FoodData Central database">
         <Database className="size-3" aria-hidden /> Database
+      </Badge>
+    );
+  if (source === "restaurant")
+    return (
+      <Badge tone="good" title="Nutrition published by the restaurant or brand, found by the AI on the web — see the source link">
+        <Store className="size-3" aria-hidden /> Restaurant data
       </Badge>
     );
   if (source === "ai_estimate")

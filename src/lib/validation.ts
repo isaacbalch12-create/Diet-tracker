@@ -26,16 +26,21 @@ export const mealItemInputSchema = z.object({
   unit: z.string().trim().min(1).max(120),
   gramsPerUnit: z.number().positive().max(10_000),
   nutrientsPer100g: nutrientProfileSchema,
-  nutrientSource: z.enum(["database", "ai_estimate", "manual"]),
+  nutrientSource: z.enum(["database", "restaurant", "ai_estimate", "manual"]),
   quantitySource: z.enum(["user_stated", "ai_estimate", "manual"]),
   manualNutrients: z.array(z.enum(NUTRIENT_KEYS)).default([]),
   foodId: uuidSchema.nullable().default(null),
   sourceRef: z
     .object({
-      provider: z.enum(["usda", "custom"]),
+      provider: z.enum(["usda", "custom", "restaurant"]),
       fdcId: z.string().max(40).optional(),
       dataType: z.string().max(40).optional(),
       description: z.string().max(300),
+      url: z
+        .string()
+        .max(2000)
+        .regex(/^https?:\/\//i, "Source links must be web addresses")
+        .optional(),
     })
     .nullable()
     .default(null),

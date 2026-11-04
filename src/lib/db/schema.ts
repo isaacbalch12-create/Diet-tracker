@@ -39,7 +39,8 @@ const updatedAt = () =>
     .$onUpdate(() => new Date());
 
 export type WeightPeriod = "morning" | "night";
-export type NutrientSource = "database" | "ai_estimate" | "manual";
+/** "restaurant": published by the restaurant or brand, found by the AI's web lookup and verified by the app. */
+export type NutrientSource = "database" | "restaurant" | "ai_estimate" | "manual";
 export type QuantitySource = "user_stated" | "ai_estimate" | "manual";
 export type Confidence = "high" | "medium" | "low";
 export type MealSource = "text" | "photo" | "manual" | "saved_meal" | "copy" | "assistant";
@@ -50,10 +51,12 @@ export interface Portion {
 }
 
 export interface FoodSourceRef {
-  provider: "usda" | "custom";
+  provider: "usda" | "custom" | "restaurant";
   fdcId?: string;
   dataType?: string;
   description: string;
+  /** Source page for restaurant data. */
+  url?: string;
 }
 
 export interface Reminders {
@@ -114,6 +117,8 @@ export const settings = pgTable(
     dashboard: jsonb("dashboard").$type<DashboardPrefs>().notNull().default(DEFAULT_DASHBOARD),
     /** Default goals and routines are created once; deleting them later is respected. */
     defaultsSeeded: boolean("defaults_seeded").notNull().default(false),
+    /** Version of the default routines last applied; bumped when the defaults change. */
+    defaultsVersion: integer("defaults_version").notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

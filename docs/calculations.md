@@ -16,8 +16,15 @@ missing value is *unknown* — never zero.
   changing the amount later scales the corrected value. Corrected nutrients
   are listed per item and the item is labelled **Manual**.
 - Data source labels: **Database** (USDA FoodData Central or your custom
-  food), **AI estimate** (no database match), **Manual** (entered/corrected by
-  you). The original AI estimate is kept with each item.
+  food), **Restaurant data** (numbers published by the restaurant or brand,
+  found by the AI's web lookup and checked by the app, with a link to the
+  source page), **AI estimate** (no match), **Manual** (entered/corrected by
+  you).
+- Restaurant data is published per serving. The app stores it per 100 g,
+  using the published serving weight, or the AI's estimate of it when none is
+  published. So 1 serving always equals the published numbers, and 2 servings
+  are exactly double. Gram amounts are converted only when the serving weight
+  is published. The original AI estimate is kept with each item.
 
 ## Days, time zones and midnight
 

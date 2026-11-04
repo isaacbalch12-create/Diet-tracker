@@ -33,6 +33,17 @@ export function fmtTime(iso: string, tz: string): string {
   return new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit" }).format(new Date(iso));
 }
 
+/** An http(s) link safe to put in href (blocks javascript: and other schemes), or null. */
+export function safeWebUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export function fdcUrl(fdcId?: string | null): string | null {
   return fdcId ? `https://fdc.nal.usda.gov/food-details/${encodeURIComponent(fdcId)}/nutrients` : null;
 }
