@@ -6,7 +6,12 @@ import "./env";
 import { MIGRATIONS_FOLDER } from "../src/lib/db";
 
 async function main() {
-  const url = process.env.DATABASE_URL;
+  // Neon (and its Vercel integration) also provide a direct, unpooled URL: better for DDL.
+  const url = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
+  if (!url && process.env.VERCEL) {
+    console.warn("No DATABASE_URL on this Vercel build: skipping migrations. Connect a Neon database to the project (Storage tab).");
+    process.exit(0);
+  }
   if (url) {
     const [{ drizzle }, { default: postgres }, { migrate }] = await Promise.all([import("drizzle-orm/postgres-js"), import("postgres"), import("drizzle-orm/postgres-js/migrator")]);
     const client = postgres(url, { max: 1 });

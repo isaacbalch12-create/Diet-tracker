@@ -1,7 +1,7 @@
 "use client";
 
-import { useQueryClient } from "@tanstack/react-query";
-import { Bell, CheckCircle2, Database, Download, Dumbbell, Footprints, Monitor, Moon, Sun, Upload, X, XCircle } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Bell, CheckCircle2, Copy, Database, Download, Dumbbell, Footprints, Monitor, Moon, Plug, Sun, Upload, X, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
 import { FoodDbLoader } from "@/components/food-db-loader";
@@ -529,6 +529,90 @@ function StatusRow({ ok, label, children }: { ok: boolean | "warn"; label: strin
   );
 }
 
+interface ConnectorJ {
+  url: string;
+  connections: { id: string; clientName: string; createdAt: string; lastUsedAt: string | null }[];
+}
+
+function ConnectorSection() {
+  const toast = useToast();
+  const q = useQuery({ queryKey: ["connector"], queryFn: () => api.get<ConnectorJ>("/api/connector") });
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const copy = async () => {
+    if (!q.data) return;
+    try {
+      await navigator.clipboard.writeText(q.data.url);
+      toast.success("Connector URL copied");
+    } catch {
+      toast.error("Couldn't copy — select the URL and copy it instead.");
+    }
+  };
+  const revoke = async (id: string) => {
+    setRevoking(id);
+    try {
+      await api.del(`/api/connector?id=${encodeURIComponent(id)}`);
+      await q.refetch();
+      toast.success("Disconnected");
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setRevoking(null);
+    }
+  };
+  const fmt = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  return (
+    <Card id="claude-connector">
+      <CardTitle sub="Log meals and ask about your data by chatting with Claude on your own Claude plan. Claude does the food analysis and restaurant lookups; Momentum stores everything and computes the totals, with the same Database / Restaurant data / AI estimate labels.">
+        <span className="inline-flex items-center gap-2">
+          <Plug className="size-4" /> Claude app connector
+        </span>
+      </CardTitle>
+      {q.error ? <ErrorBanner error={q.error} /> : null}
+      {q.data && (
+        <>
+          <div className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded-lg bg-surface-2 px-3 py-2 text-sm" data-testid="connector-url">
+              {q.data.url}
+            </code>
+            <Button variant="secondary" onClick={copy}>
+              <Copy className="size-4" /> Copy
+            </Button>
+          </div>
+          <ol className="mt-3 list-decimal pl-5 text-sm text-fg-2">
+            <li>In Claude (web or desktop), open Settings → Connectors → Add custom connector.</li>
+            <li>Name it Momentum and paste the URL above. Leave the advanced OAuth fields empty.</li>
+            <li>Click Connect, sign in to Momentum if asked, and choose Allow.</li>
+            <li>In a chat, turn the Momentum connector on and say what you ate — e.g. &quot;log lunch: Chipotle chicken burrito&quot;.</li>
+          </ol>
+          <div className="mt-3">
+            <p className="text-sm font-medium text-fg">Connected apps</p>
+            {q.data.connections.length === 0 ? (
+              <p className="text-sm text-muted">None yet.</p>
+            ) : (
+              <ul className="mt-1 divide-y divide-line">
+                {q.data.connections.map((c) => (
+                  <li key={c.id} className="flex items-center gap-2 py-2 text-sm">
+                    <span className="min-w-0 flex-1">
+                      <span className="font-medium text-fg">{c.clientName}</span>
+                      <span className="block text-xs text-muted">
+                        Connected {fmt(c.createdAt)}
+                        {c.lastUsedAt ? ` · last used ${fmt(c.lastUsedAt)}` : ""}
+                      </span>
+                    </span>
+                    <Button variant="secondary" size="sm" loading={revoking === c.id} onClick={() => revoke(c.id)}>
+                      Disconnect
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
 function StatusSection({ data }: { data: SettingsResponse }) {
   const st = data.status;
   return (
@@ -545,7 +629,13 @@ function StatusSection({ data }: { data: SettingsResponse }) {
               Configured · model <code>{st.aiModel}</code>
             </>
           ) : (
-            <>Not configured — set ANTHROPIC_API_KEY to enable text/photo analysis and the assistant.</>
+            <>
+              Not configured. In-app text/photo analysis and the assistant need ANTHROPIC_API_KEY (paid API usage). To use your Claude plan instead, add the{" "}
+              <a href="#claude-connector" className="text-accent">
+                Claude app connector
+              </a>
+              .
+            </>
           )}
         </StatusRow>
         <StatusRow ok={st.usdaFoods > 1000 ? true : "warn"} label="Food database">
@@ -598,6 +688,7 @@ export function SettingsView() {
       <RunTypesSection data={data} />
       <RemindersSection data={data} />
       <AppearanceSection />
+      <ConnectorSection />
       <LiftlogImportSection />
       <DataSection />
       <StatusSection data={data} />

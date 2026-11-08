@@ -43,7 +43,8 @@ export type WeightPeriod = "morning" | "night";
 export type NutrientSource = "database" | "restaurant" | "ai_estimate" | "manual";
 export type QuantitySource = "user_stated" | "ai_estimate" | "manual";
 export type Confidence = "high" | "medium" | "low";
-export type MealSource = "text" | "photo" | "manual" | "saved_meal" | "copy" | "assistant";
+/** "connector": logged from the Claude app through the Momentum connector (MCP). */
+export type MealSource = "text" | "photo" | "manual" | "saved_meal" | "copy" | "assistant" | "connector";
 
 export interface Portion {
   label: string;
@@ -810,6 +811,57 @@ export const goalCheckins = pgTable(
   (t) => [uniqueIndex("goal_checkins_goal_day_uq").on(t.goalId, t.localDate)],
 );
 
+// ===========================================================================
+// Claude connector (MCP) sign-in: a small OAuth 2.1 authorization server.
+// Tokens and codes are stored only as SHA-256 hashes.
+// ===========================================================================
+
+/** Clients registered through dynamic client registration (e.g. the Claude app). */
+export const oauthClients = pgTable("oauth_clients", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  redirectUris: jsonb("redirect_uris").$type<string[]>().notNull(),
+  createdAt: createdAt(),
+});
+
+/** Single-use authorization codes (PKCE S256), valid for a few minutes. */
+export const oauthCodes = pgTable("oauth_codes", {
+  codeHash: text("code_hash").primaryKey(),
+  clientId: text("client_id")
+    .notNull()
+    .references(() => oauthClients.id, { onDelete: "cascade" }),
+  redirectUri: text("redirect_uri").notNull(),
+  codeChallenge: text("code_challenge").notNull(),
+  scope: text("scope").notNull(),
+  resource: text("resource"),
+  expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true, mode: "date" }),
+});
+
+/**
+ * One row per approved connection. Refresh tokens rotate on every use; a
+ * reused old refresh token revokes the connection (replay protection).
+ */
+export const oauthGrants = pgTable(
+  "oauth_grants",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => oauthClients.id, { onDelete: "cascade" }),
+    scope: text("scope").notNull(),
+    accessTokenHash: text("access_token_hash").notNull().unique(),
+    accessExpiresAt: timestamp("access_expires_at", { withTimezone: true, mode: "date" }).notNull(),
+    refreshTokenHash: text("refresh_token_hash").unique(),
+    previousRefreshHash: text("previous_refresh_hash"),
+    refreshExpiresAt: timestamp("refresh_expires_at", { withTimezone: true, mode: "date" }),
+    createdAt: createdAt(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true, mode: "date" }),
+  },
+  (t) => [index("oauth_grants_prev_refresh_idx").on(t.previousRefreshHash)],
+);
+
 export type Settings = typeof settings.$inferSelect;
 export type Goal = typeof goals.$inferSelect;
 export type WeightEntry = typeof weightEntries.$inferSelect;
@@ -838,3 +890,5 @@ export type RoutineTemplate = typeof routineTemplates.$inferSelect;
 export type JournalEntry = typeof journalEntries.$inferSelect;
 export type UserGoal = typeof userGoals.$inferSelect;
 export type GoalCheckin = typeof goalCheckins.$inferSelect;
+export type OAuthClient = typeof oauthClients.$inferSelect;
+export type OAuthGrant = typeof oauthGrants.$inferSelect;

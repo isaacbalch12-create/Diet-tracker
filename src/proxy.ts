@@ -2,9 +2,13 @@ import { type NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE, verifySessionToken } from "./lib/auth";
 import { authMode } from "./lib/env";
 
-const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health", "/manifest.webmanifest", "/icon.svg"];
-/** Token-authenticated (Authorization: Bearer) endpoints called by phones, not browsers. */
-const TOKEN_PATHS = ["/api/ingest/health"];
+const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health", "/manifest.webmanifest", "/icon.svg", "/.well-known"];
+/**
+ * Endpoints that don't use the browser session: bearer-token APIs called by
+ * phones and the Claude connector, and the OAuth endpoints Claude calls to
+ * sign in. They carry no ambient credentials, so the same-origin check is skipped.
+ */
+const TOKEN_PATHS = ["/api/ingest/health", "/api/mcp", "/api/oauth/token", "/api/oauth/register", "/api/oauth/revoke"];
 
 function isPublic(pathname: string) {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`)) || TOKEN_PATHS.includes(pathname);

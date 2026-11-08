@@ -21,6 +21,9 @@ const state: DbState = (globalForDb.__dietDb ??= { promise: null, override: null
 
 export const MIGRATIONS_FOLDER = path.join(process.cwd(), "drizzle");
 
+/** Netlify Functions and Vercel Functions run one request per instance: keep pools small. */
+const serverless = () => env.onNetlify || !!process.env.VERCEL;
+
 async function connectPostgres(url: string): Promise<Db> {
   const [{ drizzle }, { default: postgres }] = await Promise.all([
     import("drizzle-orm/postgres-js"),
@@ -28,8 +31,8 @@ async function connectPostgres(url: string): Promise<Db> {
   ]);
   const client = postgres(url, {
     // Serverless instances handle one request at a time; keep their pools small.
-    max: Number(process.env.DATABASE_POOL_SIZE ?? (env.onNetlify ? 2 : 5)),
-    idle_timeout: env.onNetlify ? 20 : undefined,
+    max: Number(process.env.DATABASE_POOL_SIZE ?? (serverless() ? 2 : 5)),
+    idle_timeout: serverless() ? 20 : undefined,
     // Supabase/Neon poolers (transaction mode) do not support prepared statements.
     prepare: process.env.DATABASE_PREPARE === "true",
   });

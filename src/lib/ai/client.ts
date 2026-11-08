@@ -16,7 +16,7 @@ export function aiConfigured(): boolean {
 
 export function getAnthropic(): Anthropic {
   if (!env.anthropicApiKey) {
-    throw new AppError(503, "ai_not_configured", "AI features need an ANTHROPIC_API_KEY on the server. You can still log foods by searching the database or entering them manually.");
+    throw new AppError(503, "ai_not_configured", "In-app AI analysis needs an ANTHROPIC_API_KEY on the server. You can log foods by searching the database or entering them manually — or log meals by chatting with Claude through the Momentum connector (Settings → Claude app connector).");
   }
   cached ??= new Anthropic({ apiKey: env.anthropicApiKey, maxRetries: 2, timeout: 180_000 });
   return cached;

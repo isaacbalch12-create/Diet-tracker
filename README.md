@@ -83,6 +83,8 @@ it. It never touches your real data.
 | `SESSION_SECRET` | production | 32+ random characters used to sign the session cookie (`openssl rand -base64 48`). |
 | `ANTHROPIC_API_KEY` | for AI | Enables text/photo meal analysis and the assistant. Get one at [console.anthropic.com](https://console.anthropic.com/). |
 | `ANTHROPIC_MODEL` | no | Defaults to `claude-opus-5-5`. |
+| `APP_URL` | no | Public base URL (e.g. `https://momentum.example.com`) used for the connector's OAuth issuer and URLs. Derived from the request when unset. |
+| `OAUTH_EXTRA_REDIRECT_URIS` | no | Comma-separated extra redirect URLs the connector's OAuth server accepts (e.g. the MCP Inspector's). Claude's own are always allowed. |
 | `ANTHROPIC_FALLBACKS` | no | Server-side refusal fallback is on by default; set `off` if a gateway rejects it. |
 | `AI_WEB_LOOKUP` | no | Restaurant/brand nutrition lookups with Claude's web search (on by default; needs web search allowed in the Claude Console, $10 per 1,000 searches). Set `off` to use only the USDA database. |
 | `FDC_API_KEY` | recommended | Free [USDA API key](https://fdc.nal.usda.gov/api-key-signup) for online lookups (branded products, foods not in the local copy). Without it the shared, heavily rate-limited `DEMO_KEY` is used. |
@@ -153,7 +155,8 @@ How the AI is used — and what it is *not* trusted with:
   the matched database rows and computes all totals itself. Only foods without
   a database match use the model's per-100 g estimate, and they are labelled
   **AI estimate**. Implausible matches (database vs. estimate differ >2.5×) are
-  flagged for review.
+  flagged for review. When portions, oils or ingredients materially change the
+  estimate, Claude asks up to 3 short clarifying questions.
 - **Restaurants and brands:** when you name one ("Chipotle chicken burrito",
   "Starbucks grande latte"), Claude calls a `lookup_restaurant_nutrition` tool.
   That runs a separate Claude request with Anthropic's web search tool, which
@@ -164,8 +167,7 @@ How the AI is used — and what it is *not* trusted with:
   the source page. Totals are always n × the published per-serving values. If
   nothing trustworthy is found, the food falls back to USDA or an AI estimate.
   Web search costs $10 per 1,000 searches, and an organization admin has to
-  allow it in the Claude Console. Set `AI_WEB_LOOKUP=off` to turn it off. When portions, oils or ingredients materially change the
-  estimate, Claude asks up to 3 short clarifying questions.
+  allow it in the Claude Console. Set `AI_WEB_LOOKUP=off` to turn it off.
 - **Nothing is saved until you confirm** the draft (unless you tick *Quick
   save*). Requests carry an idempotency key, so a retried request returns the
   existing result instead of creating duplicates.
@@ -177,6 +179,49 @@ How the AI is used — and what it is *not* trusted with:
 The app uses adaptive thinking with `effort: medium`, prompt caching, and the
 server-side refusal fallback. Each meal analysis is typically a few model
 calls (search → final answer); photo analysis costs more input tokens.
+
+## Claude app connector (use your Claude plan instead of an API key)
+
+Momentum is also an MCP server, so you can add it to the Claude app as a
+custom connector (Pro, Max, Team and Enterprise plans). Then you log meals
+and ask about your data by chatting with Claude ("log lunch: Chipotle chicken
+burrito", a photo of your plate, "how's my protein this week?"). Claude does
+the interpreting and restaurant lookups on your own Claude plan, so the
+server needs no `ANTHROPIC_API_KEY` and makes no paid API calls. Momentum still
+stores everything and computes every total itself.
+
+**Set up:** open *Settings → Claude app connector* and copy the URL (it is
+`https://<your-site>/api/mcp`). In Claude go to *Settings → Connectors → Add
+custom connector*, paste the URL and leave the OAuth fields empty. Click
+*Connect*, sign in to Momentum and choose *Allow*. Connected apps are listed
+in the same Settings card, and you can disconnect them there.
+
+**Tools:** every read-only tool the in-app assistant has (day logs, nutrition
+stats, rankings, comparisons, weight, training, running, steps & sleep,
+routines, goals, insights), plus `search_foods`, `log_meal`, `copy_meal` and
+`delete_meal`. In `log_meal`, each food takes exactly one source:
+- a `food_id` from `search_foods`: USDA values, labelled **Database**;
+- published `restaurant` values with their `source_url`: labelled
+  **Restaurant data**. The app range-checks the values and checks calories
+  against the macros, links to the source and notes that Claude reported it;
+- `estimate_per_100g`: labelled **AI estimate**.
+Unknown food ids, implausible numbers and items with no source are rejected
+with a message Claude can act on. A repeat of the same call within a minute
+is ignored, so retries never create duplicates. Meals logged this way show
+*Claude app (connector)* as their source.
+
+**Security:** the connector uses OAuth 2.1, implemented in the app
+(`src/lib/services/oauth.ts`):
+- Discovery follows RFC 9728 and RFC 8414, and clients register dynamically
+  (RFC 7591).
+- Only Claude's redirect URLs are accepted: `https://claude.ai/api/mcp/auth_callback`
+  and `https://claude.com/api/mcp/auth_callback`, plus loopback for Claude
+  Code. Add others with `OAUTH_EXTRA_REDIRECT_URIS`.
+- PKCE S256 is required. Approving a connection requires the Momentum login.
+- Codes are single-use and live 5 minutes. Access tokens live 1 hour. Refresh
+  tokens rotate on every use, and a reused old refresh token revokes the
+  connection.
+- Everything is stored only as SHA-256 hashes.
 
 ## Authentication & security
 
@@ -229,16 +274,36 @@ are limited to 6 MB. Photos are resized in the browser and uploaded one at a
 time (5 MB cap each), but a backup that contains many photos may be too large
 to restore through the browser.
 
-### Option C — Vercel (or any serverless host) + hosted PostgreSQL
+### Option C — Vercel + Neon (fits the free Hobby and Neon free plans)
 
-1. Create a Postgres database (Supabase, Neon, …) and copy its connection
-   string (for Supabase use the pooler URL; keep `DATABASE_PREPARE=false`).
-2. Locally: `DATABASE_URL=… npm run db:migrate && DATABASE_URL=… npm run usda:import`.
-3. Import the repo in Vercel and set `DATABASE_URL`, `APP_PASSWORD`,
-   `SESSION_SECRET`, `ANTHROPIC_API_KEY`, `FDC_API_KEY` (and S3 settings if you
-   prefer bucket storage for photos).
-4. AI routes declare `maxDuration = 300`; make sure your plan allows long
-   enough function durations (analysis usually takes 10–40 s).
+The free tiers fit one person's tracker: Vercel Hobby has no usage bills (an
+account over its limits is paused instead), and Neon's free Postgres sleeps
+when idle. With the Claude app connector you need no `ANTHROPIC_API_KEY`.
+
+1. In Vercel, *Add New → Project* and import this GitHub repository. Pick
+   the branch you deploy from as the production branch.
+2. In the project's *Storage* tab, create a **Neon** Postgres database and
+   connect it to the project (all environments). This sets `DATABASE_URL` and
+   `DATABASE_URL_UNPOOLED`.
+3. In *Settings → Environment Variables*, add `APP_PASSWORD` and
+   `SESSION_SECRET` (32+ random characters). Optional: `FDC_API_KEY`,
+   `ANTHROPIC_API_KEY` (only for in-app AI analysis, which is paid API usage).
+4. Deploy. The `vercel-build` script applies database migrations before
+   `next build`, so every deploy keeps the schema current.
+5. Sign in, then click **Settings → Load USDA food database** once.
+
+To move from another host, take these steps:
+1. On the old site, use *Settings → Export & backup → Full backup (JSON)*.
+   Vercel limits request bodies to 4.5 MB, so use the backup without photos
+   unless you have only a few.
+2. On the new site, use *Restore from backup*.
+3. Phone health connections keep working once your Shortcut or exporter
+   points at the new address. Add the Claude connector again with the new URL.
+
+Other serverless hosts work the same way with any hosted Postgres
+(`DATABASE_URL`, run `npm run db:migrate` per deploy; for Supabase use the
+pooler URL and keep `DATABASE_PREPARE=false`). AI routes declare
+`maxDuration = 300` (analysis usually takes 10–40 s).
 
 The embedded database is refused on serverless platforms because their disks
 are ephemeral.

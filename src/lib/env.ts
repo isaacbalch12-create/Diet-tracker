@@ -35,6 +35,17 @@ export const env = {
   get anthropicFallbacks() {
     return str("ANTHROPIC_FALLBACKS") !== "off";
   },
+  /** Public base URL (e.g. https://momentum.example.com). Optional: derived from the request when unset. */
+  get publicUrl() {
+    return str("APP_URL") ?? str("PUBLIC_URL");
+  },
+  /** Extra OAuth redirect URLs for the connector (comma-separated), e.g. for the MCP Inspector. */
+  get oauthExtraRedirects(): string[] {
+    return (str("OAUTH_EXTRA_REDIRECT_URIS") ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  },
   /** Restaurant/brand nutrition lookups via Claude's web search (on by default; "off" disables). */
   get aiWebLookup() {
     return str("AI_WEB_LOOKUP") !== "off";

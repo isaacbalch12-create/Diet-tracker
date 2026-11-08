@@ -178,3 +178,56 @@ test("goals: create from a preset, see live progress, pause and delete", async (
   const del = await apiCall(page.request, "DELETE", `/api/user-goals/${steps.id}`);
   expect(del.ok()).toBeTruthy();
 });
+
+test("Claude connector: sign-in requires the owner, consent issues a code, settings can disconnect", async ({ page, browser }) => {
+  const { createHash, randomBytes } = await import("node:crypto");
+  const REDIRECT = "http://localhost:5599/callback";
+  const anon = await pwRequest.newContext({ baseURL: BASE });
+  // Claude's side: unauthenticated call → 401 with discovery pointer → register.
+  const challengeRes = await anon.post("/api/mcp", { data: { jsonrpc: "2.0", id: 1, method: "tools/list" }, headers: { accept: "application/json, text/event-stream" } });
+  expect(challengeRes.status()).toBe(401);
+  expect(challengeRes.headers()["www-authenticate"]).toContain("/.well-known/oauth-protected-resource");
+  const reg = await (await anon.post("/api/oauth/register", { data: { client_name: "Claude", redirect_uris: [REDIRECT] } })).json();
+  const verifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const authorize = `/oauth/authorize?response_type=code&client_id=${reg.client_id}&redirect_uri=${encodeURIComponent(REDIRECT)}&code_challenge=${challenge}&code_challenge_method=S256&state=xyz&scope=momentum%20offline_access`;
+
+  // A visitor without the password lands on the login page, not the consent screen.
+  const stranger = await browser.newContext();
+  const sp = await stranger.newPage();
+  await sp.goto(authorize);
+  await expect(sp).toHaveURL(/\/login\?next=/);
+  await stranger.close();
+
+  // The owner signs in, sees what is being connected, and allows it.
+  await login(page);
+  // Skip the first-run welcome screen when this test runs on its own.
+  expect((await apiCall(page.request, "PATCH", "/api/settings", { onboarded: true })).ok()).toBeTruthy();
+  await page.goto(authorize);
+  await expect(page.getByText("wants to connect to your Momentum account")).toBeVisible();
+  await expect(page.getByText("localhost:5599")).toBeVisible();
+  // Nothing listens on the callback port; read the redirect the consent POST answers with.
+  const [decision] = await Promise.all([page.waitForResponse((r) => r.url().endsWith("/api/oauth/authorize") && r.request().method() === "POST"), page.getByRole("button", { name: "Allow" }).click()]);
+  expect(decision.status()).toBe(303);
+  const cb = new URL(decision.headers()["location"]);
+  expect(`${cb.origin}${cb.pathname}`).toBe(REDIRECT);
+  expect(cb.searchParams.get("state")).toBe("xyz");
+
+  const tokenRes = await anon.post("/api/oauth/token", { form: { grant_type: "authorization_code", code: cb.searchParams.get("code")!, code_verifier: verifier, client_id: reg.client_id, redirect_uri: REDIRECT } });
+  expect(tokenRes.ok()).toBeTruthy();
+  const tokens = await tokenRes.json();
+  const list = await anon.post("/api/mcp", { data: { jsonrpc: "2.0", id: 2, method: "tools/list" }, headers: { accept: "application/json, text/event-stream", authorization: `Bearer ${tokens.access_token}` } });
+  expect(list.ok()).toBeTruthy();
+  expect(JSON.stringify(await list.json())).toContain("log_meal");
+
+  // Settings shows the URL to paste into Claude and the connection, which can be disconnected.
+  await page.goto("/settings#claude-connector");
+  await expect(page.getByTestId("connector-url")).toHaveText(`${BASE}/api/mcp`);
+  const section = page.locator("#claude-connector");
+  await expect(section.getByText("Claude", { exact: true })).toBeVisible();
+  await section.getByRole("button", { name: "Disconnect" }).click();
+  await expect(section.getByText("None yet.")).toBeVisible();
+  const after = await anon.post("/api/mcp", { data: { jsonrpc: "2.0", id: 3, method: "tools/list" }, headers: { accept: "application/json, text/event-stream", authorization: `Bearer ${tokens.access_token}` } });
+  expect(after.status()).toBe(401);
+  await anon.dispose();
+});

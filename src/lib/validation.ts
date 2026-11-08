@@ -61,7 +61,7 @@ export const createMealSchema = z.object({
   category: z.string().trim().min(1).max(40),
   title: z.string().trim().min(1).max(200),
   description: z.string().max(4000).nullable().optional(),
-  source: z.enum(["text", "photo", "manual", "saved_meal", "copy", "assistant"]),
+  source: z.enum(["text", "photo", "manual", "saved_meal", "copy", "assistant", "connector"]),
   analysisId: uuidSchema.optional(),
   notes: z.string().max(2000).nullable().optional(),
   items: z.array(mealItemInputSchema).min(1, "A meal needs at least one food").max(60),

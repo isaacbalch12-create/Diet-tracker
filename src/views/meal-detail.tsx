@@ -16,7 +16,7 @@ import type { DraftItem } from "@/lib/drafts";
 import { fmtTime } from "@/lib/format";
 import { formatLocalDate, localParts, logicalDayTimeToInstant } from "@/lib/time";
 
-const SOURCE_LABEL: Record<string, string> = { text: "Described in text (AI)", photo: "Photo (AI)", manual: "Manual / database", saved_meal: "Saved meal", copy: "Copied meal", assistant: "Assistant" };
+const SOURCE_LABEL: Record<string, string> = { text: "Described in text (AI)", photo: "Photo (AI)", manual: "Manual / database", saved_meal: "Saved meal", copy: "Copied meal", assistant: "Assistant", connector: "Claude app (connector)" };
 
 function Editor({ meal, settings, onDone }: { meal: MealJ; settings: SettingsJ; onDone: () => void }) {
   const toast = useToast();

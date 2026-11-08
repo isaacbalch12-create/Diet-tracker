@@ -97,6 +97,43 @@ with client-generated ids, which makes saves idempotent.
 5. The draft is stored in `meal_analyses` and shown for review. Saving calls
    `POST /api/meals` with its own idempotency key.
 
+## Claude app connector (MCP)
+
+`/api/mcp` is a stateless MCP server (Streamable HTTP with JSON responses; one
+`Server` per request, from `@modelcontextprotocol/sdk`). It is built in
+`src/lib/mcp/server.ts`.
+
+Tools:
+- the assistant's read-only tools, called through `runAssistantTool`;
+- `search_foods`;
+- `log_meal`, `copy_meal` and `delete_meal`.
+
+`log_meal` resolves items through the same `resolveItems` pipeline as in-app
+AI analysis. Database matches, verified restaurant values (`verifyResult`)
+and labelled estimates therefore behave identically, and totals come from the
+nutrition calculator. Meals are saved with `source: "connector"` and an
+idempotency key derived from the call.
+
+Authentication is a small OAuth 2.1 authorization server
+(`src/lib/services/oauth.ts`, tables `oauth_clients`, `oauth_codes`,
+`oauth_grants`).
+
+Endpoints:
+- discovery documents under `/.well-known/`;
+- `/api/oauth/register` (dynamic client registration);
+- `/oauth/authorize` (the consent page, behind the app login), which posts
+  its decision to `/api/oauth/authorize`;
+- `/api/oauth/token` (PKCE S256, rotating refresh tokens with replay
+  revocation);
+- `/api/oauth/revoke`.
+
+Behavior:
+- An unauthenticated MCP call gets a `401` whose `WWW-Authenticate` header
+  points to the protected resource metadata. That is how Claude starts
+  sign-in.
+- The proxy treats these endpoints as token endpoints: no session, and no
+  same-origin check.
+
 ## Duplicate prevention
 
 - Creates that can be retried (meals, workouts, runs, water) carry a
